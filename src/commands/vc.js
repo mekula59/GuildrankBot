@@ -144,6 +144,8 @@ module.exports = {
       return interaction.reply({ content: '❌ You need Manage Server to use VC tracking commands.', ephemeral: true });
     }
 
+    await interaction.deferReply({ ephemeral: true });
+
     const throttle = checkMutationThrottle({
       commandKey: `vc_${subcommand}`,
       guildId: interaction.guildId,
@@ -161,17 +163,14 @@ module.exports = {
         scope: throttle.scope,
         retry_after_seconds: throttle.retryAfterSeconds,
       });
-      return interaction.reply({
+      return interaction.editReply({
         content: `⏳ \`/vc ${subcommand}\` is cooling down for this ${throttle.scope}. Try again in about ${throttle.retryAfterSeconds}s.`,
-        ephemeral: true,
       });
     }
 
     if (!(await isSetup(interaction.guildId))) {
-      return interaction.reply({ content: '⚙️ Run `/setup` first!', ephemeral: true });
+      return interaction.editReply({ content: '⚙️ Run `/setup` first!' });
     }
-
-    await interaction.deferReply({ ephemeral: true });
 
     try {
       if (subcommand === 'track') {
