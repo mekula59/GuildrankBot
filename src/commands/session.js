@@ -2,6 +2,7 @@ const {
   SlashCommandBuilder,
   EmbedBuilder,
   PermissionFlagsBits,
+  PermissionsBitField,
   ChannelType,
 } = require('discord.js');
 
@@ -26,6 +27,13 @@ const {
   getLockinDraftWithPlayers,
   upsertSessionLockinDraft,
 } = require('../utils/sessionLockins');
+const {
+  endLiveSession,
+  finalizeLiveSession,
+  listLiveSessions,
+  startLiveSession,
+  updateLiveSession,
+} = require('../utils/liveSessions');
 const { checkMutationThrottle } = require('../utils/throttle');
 const logger = require('../utils/logger');
 const { BRAND_COLOR } = require('../../config/constants');
@@ -40,12 +48,77 @@ function extractMentionedUserIds(content) {
   return [...new Set([...content.matchAll(/<@!?(\d+)>/g)].map(match => match[1]))];
 }
 
+async function resolveMentionedGuildUserIds(interaction, content, {
+  fieldName = 'players',
+  requireSingle = false,
+} = {}) {
+  const mentionedIds = extractMentionedUserIds(content);
+  if (!mentionedIds.length) {
+    throw new Error(`No valid @mentions were found in \`${fieldName}\`.`);
+  }
+
+  const resolvedIds = [];
+  const invalidIds = [];
+
+  for (const userId of mentionedIds) {
+    try {
+      const member = interaction.guild.members.cache.get(userId) || await interaction.guild.members.fetch(userId);
+      if (!member?.user?.bot) {
+        resolvedIds.push(member.id);
+      } else {
+        invalidIds.push(userId);
+      }
+    } catch {
+      invalidIds.push(userId);
+    }
+  }
+
+  if (invalidIds.length) {
+    throw new Error(`These mentioned users are not valid members of this server: ${invalidIds.map(id => `<@${id}>`).join(', ')}`);
+  }
+
+  if (requireSingle && resolvedIds.length !== 1) {
+    throw new Error(`Mention exactly one user in \`${fieldName}\`.`);
+  }
+
+  return resolvedIds;
+}
+
 function requiresManageGuild(subcommand) {
   return ['correct'].includes(subcommand);
 }
 
 function requiresPrivateReply(subcommand) {
-  return ['candidates', 'candidate', 'lockin', 'finalize', 'discard', 'schedule', 'upcoming', 'cancel', 'reschedule'].includes(subcommand);
+  return ['candidates', 'candidate', 'lockin', 'start', 'update', 'end', 'finalize', 'discard', 'schedule', 'upcoming', 'cancel', 'reschedule'].includes(subcommand);
+}
+
+function resolveAutocompleteSubcommand(interaction) {
+  return interaction.options.getSubcommand(false) || interaction.options.data?.[0]?.name || null;
+}
+
+function hasAutocompletePermission(interaction, requiredPermission) {
+  if (interaction.memberPermissions?.has?.(requiredPermission)) {
+    return true;
+  }
+
+  const rawPermissions = interaction.member?.permissions;
+  if (rawPermissions?.has?.(requiredPermission)) {
+    return true;
+  }
+
+  try {
+    if (typeof rawPermissions === 'string' && /^\d+$/.test(rawPermissions)) {
+      return new PermissionsBitField(BigInt(rawPermissions)).has(requiredPermission);
+    }
+
+    if (typeof rawPermissions === 'bigint' || typeof rawPermissions === 'number') {
+      return new PermissionsBitField(BigInt(rawPermissions)).has(requiredPermission);
+    }
+  } catch {
+    return false;
+  }
+
+  return false;
 }
 
 function formatStatus(status) {
@@ -70,6 +143,40 @@ function formatDurationMinutes(startedAt, endedAt = null) {
   return `${minutes}m`;
 }
 
+function formatCandidateDisplayStamp(value) {
+  if (!value) return 'unknown_time';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'unknown_time';
+  const iso = date.toISOString();
+  return `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`;
+}
+
+function buildCandidateDisplayLabel(candidate) {
+  return `${formatCandidateDisplayStamp(candidate.started_at)} · ${candidate.channel_name_snapshot || 'voice'} · ${candidate.status}`;
+}
+
+function buildCandidateAutocompleteName(candidate) {
+  const parts = [
+    candidate.game_key || 'session',
+    candidate.channel_name_snapshot || 'voice',
+    formatCandidateDisplayStamp(candidate.started_at),
+    candidate.status || 'unknown',
+  ];
+
+  const name = parts.join(' · ');
+  return name.length > 100 ? `${name.slice(0, 99)}…` : name;
+}
+
+function buildCandidateSearchText(candidate) {
+  return [
+    candidate.id,
+    candidate.game_key,
+    candidate.channel_name_snapshot,
+    candidate.status,
+    formatCandidateDisplayStamp(candidate.started_at),
+  ].filter(Boolean).join(' ').toLowerCase();
+}
+
 function truncate(text, maxLength = 1024) {
   if (!text) return '—';
   return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
@@ -86,6 +193,30 @@ function buildScheduleSummaryLine(session) {
     `Host: ${session.host_discord_user_id ? `<@${session.host_discord_user_id}>` : '—'}`,
     `Status: \`${session.status}\``,
   ].join('\n');
+}
+
+function buildScheduleAutocompleteName(session) {
+  const parts = [
+    session.game_key || 'session',
+    session.linked_channel_id ? `vc:${session.linked_channel_id}` : 'vc:unlinked',
+    formatCandidateDisplayStamp(session.scheduled_start_at),
+    session.status || 'scheduled',
+  ];
+
+  const name = parts.join(' · ');
+  return name.length > 100 ? `${name.slice(0, 99)}…` : name;
+}
+
+function buildScheduleSearchText(session) {
+  return [
+    session.id,
+    session.game_key,
+    session.session_type,
+    session.linked_channel_id,
+    session.host_discord_user_id,
+    session.status,
+    formatCandidateDisplayStamp(session.scheduled_start_at),
+  ].filter(Boolean).join(' ').toLowerCase();
 }
 
 function formatCandidateScheduleContext(candidate, scheduledSession = null) {
@@ -121,7 +252,8 @@ function buildCandidateSummaryLine(candidate, scheduledSession = null) {
       : 'Schedule: none';
 
   return [
-    `ID: \`${candidate.id}\``,
+    `Candidate: ${buildCandidateDisplayLabel(candidate)}`,
+    `UUID: \`${candidate.id}\``,
     `Channel: <#${candidate.channel_id}>`,
     `Game: \`${candidate.game_key}\``,
     `Status: \`${candidate.status}\``,
@@ -143,6 +275,53 @@ function buildCandidateParticipantLines(participants) {
 function formatLockinSelectionSource(selectionSource) {
   if (!selectionSource) return '—';
   return formatStatus(selectionSource);
+}
+
+function buildLiveSessionDisplayLabel(liveSession) {
+  return `${liveSession.game_key || 'session'} · ${liveSession.channel_name_snapshot || 'voice'} · ${formatCandidateDisplayStamp(liveSession.started_at)} · ${liveSession.status}`;
+}
+
+function buildLiveSessionAutocompleteName(liveSession) {
+  const name = buildLiveSessionDisplayLabel(liveSession);
+  return name.length > 100 ? `${name.slice(0, 99)}…` : name;
+}
+
+function buildLiveSessionSearchText(liveSession) {
+  return [
+    liveSession.id,
+    liveSession.game_key,
+    liveSession.channel_name_snapshot,
+    liveSession.channel_id,
+    liveSession.status,
+    liveSession.start_context_type,
+    formatCandidateDisplayStamp(liveSession.started_at),
+  ].filter(Boolean).join(' ').toLowerCase();
+}
+
+function formatLiveSessionPeople(people, rosterRole) {
+  const ids = people
+    .filter(row => row.roster_role === rosterRole)
+    .map(row => `<@${row.discord_user_id}>`);
+  return ids.length ? ids.join(', ') : '—';
+}
+
+function buildLiveSessionSummaryLine(liveSession, people = []) {
+  return [
+    `Live Session: ${buildLiveSessionDisplayLabel(liveSession)}`,
+    `UUID: \`${liveSession.id}\``,
+    `Channel: <#${liveSession.channel_id}>`,
+    `Game: \`${liveSession.game_key}\``,
+    `Type: \`${liveSession.session_type}\``,
+    `Started: ${formatUtcDateTime(liveSession.started_at)}`,
+    `Ended: ${liveSession.ended_at ? formatUtcDateTime(liveSession.ended_at) : 'live'}`,
+    `Players: ${people.filter(row => row.roster_role === 'player').length}`,
+    `Spectators: ${people.filter(row => row.roster_role === 'spectator').length}`,
+    `Winner: ${liveSession.winner_discord_user_id ? `<@${liveSession.winner_discord_user_id}>` : '—'}`,
+    `MVP: ${liveSession.mvp_discord_user_id ? `<@${liveSession.mvp_discord_user_id}>` : '—'}`,
+    `Source: \`${formatStatus(liveSession.start_context_type)}\``,
+    `Candidate: ${liveSession.source_candidate_id ? `\`${liveSession.source_candidate_id}\`` : '—'}`,
+    `Schedule: ${liveSession.scheduled_session_id ? `\`${liveSession.scheduled_session_id}\`` : '—'}`,
+  ].join('\n');
 }
 
 function formatLockedRoster(lockinDraft, lockinPlayers) {
@@ -422,7 +601,7 @@ async function handleCandidateDetail(interaction) {
   const lockin = await getLockinDraftWithPlayers(interaction.guildId, candidate.id);
   const embed = new EmbedBuilder()
     .setColor(BRAND_COLOR)
-    .setTitle(`🔍 Session Candidate ${candidate.id.slice(0, 8)}`)
+    .setTitle(`🔍 ${buildCandidateDisplayLabel(candidate)}`)
     .setDescription(buildCandidateSummaryLine(candidate, scheduledSession))
     .addFields(
       {
@@ -452,12 +631,11 @@ async function handleCandidateDetail(interaction) {
 
 async function handleSessionLockin(interaction) {
   const candidateId = interaction.options.getString('candidate_id', true);
+  const candidate = await getSessionCandidateById(interaction.guildId, candidateId);
   const participantMentions = interaction.options.getString('players');
-  const participantIds = participantMentions ? extractMentionedUserIds(participantMentions) : null;
-
-  if (participantMentions && !participantIds.length) {
-    return interaction.editReply('❌ No valid @mentions were found in `players`. Mention the users you want in the draft roster.');
-  }
+  const participantIds = participantMentions
+    ? await resolveMentionedGuildUserIds(interaction, participantMentions, { fieldName: 'players' })
+    : null;
 
   const result = await upsertSessionLockinDraft({
     guildId: interaction.guildId,
@@ -472,7 +650,7 @@ async function handleSessionLockin(interaction) {
     .setColor(BRAND_COLOR)
     .setTitle('🧷 Session Lock-In Saved')
     .addFields(
-      { name: 'Candidate', value: `\`${candidateId}\`` },
+      { name: 'Candidate', value: candidate ? `${buildCandidateDisplayLabel(candidate)}\n\`${candidateId}\`` : `\`${candidateId}\`` },
       { name: 'Draft', value: `\`${result.draft.id}\`` },
       { name: 'Selection Source', value: `\`${formatLockinSelectionSource(result.draft.selection_source)}\``, inline: true },
       { name: 'Players', value: truncate(result.players.map(row => `<@${row.discord_user_id}>`).join(', ') || '—') },
@@ -498,32 +676,198 @@ async function handleSessionLockin(interaction) {
   return interaction.editReply({ embeds: [embed], allowedMentions: { parse: [] } });
 }
 
-async function handleCandidateFinalize(interaction) {
-  const candidateId = interaction.options.getString('candidate_id', true);
-  const scheduledSessionId = interaction.options.getString('scheduled_session_id') || null;
-  const notes = interaction.options.getString('notes') || null;
-  const winner = interaction.options.getUser('winner');
-  const mvp = interaction.options.getUser('mvp');
-  const participantMentions = interaction.options.getString('players');
-  const participantIds = participantMentions ? extractMentionedUserIds(participantMentions) : null;
-
-  const result = await finalizeSessionCandidate({
-    requestId: interaction.id,
+async function handleLiveSessionStart(interaction) {
+  const candidateId = interaction.options.getString('candidate_id');
+  const scheduledSessionId = interaction.options.getString('scheduled_session_id');
+  const channel = interaction.options.getChannel('channel');
+  const result = await startLiveSession({
+    guild: interaction.guild,
     guildId: interaction.guildId,
-    candidateId,
+    candidateId: candidateId || null,
+    scheduledSessionId: scheduledSessionId || null,
+    channelId: channel?.id || null,
+    gameKey: interaction.options.getString('game'),
+    sessionType: interaction.options.getString('session_type'),
+    notes: interaction.options.getString('notes'),
     actorDiscordId: interaction.user.id,
-    scheduledSessionId,
-    participantIds,
-    notes,
-    winnerId: winner?.id || null,
-    mvpId: mvp?.id || null,
+    requestId: interaction.id,
   });
 
   const embed = new EmbedBuilder()
     .setColor(BRAND_COLOR)
-    .setTitle('✅ Session Candidate Finalized')
+    .setTitle('🟢 Live Session Started')
+    .setDescription(buildLiveSessionSummaryLine(result.liveSession, result.people))
     .addFields(
-      { name: 'Candidate', value: `\`${candidateId}\`` },
+      { name: 'Players', value: truncate(formatLiveSessionPeople(result.people, 'player')) },
+      { name: 'Spectators', value: truncate(formatLiveSessionPeople(result.people, 'spectator')) },
+    )
+    .setFooter({ text: 'Draft only: official stats move only on finalize' })
+    .setTimestamp();
+
+  if (result.liveSession.notes) {
+    embed.addFields({ name: 'Notes', value: result.liveSession.notes });
+  }
+
+  return interaction.editReply({ embeds: [embed], allowedMentions: { parse: [] } });
+}
+
+async function handleLiveSessionUpdate(interaction) {
+  const liveSessionId = interaction.options.getString('live_session_id', true);
+  const playerMentions = interaction.options.getString('players');
+  const spectatorMentions = interaction.options.getString('spectators');
+  const winnerMention = interaction.options.getString('winner');
+  const mvpMention = interaction.options.getString('mvp');
+  const result = await updateLiveSession({
+    guildId: interaction.guildId,
+    liveSessionId,
+    actorDiscordId: interaction.user.id,
+    playerIds: playerMentions
+      ? await resolveMentionedGuildUserIds(interaction, playerMentions, { fieldName: 'players' })
+      : undefined,
+    spectatorIds: spectatorMentions
+      ? await resolveMentionedGuildUserIds(interaction, spectatorMentions, { fieldName: 'spectators' })
+      : undefined,
+    winnerId: winnerMention
+      ? (await resolveMentionedGuildUserIds(interaction, winnerMention, { fieldName: 'winner', requireSingle: true }))[0]
+      : undefined,
+    mvpId: mvpMention
+      ? (await resolveMentionedGuildUserIds(interaction, mvpMention, { fieldName: 'mvp', requireSingle: true }))[0]
+      : undefined,
+    notes: interaction.options.getString('notes') ?? undefined,
+    requestId: interaction.id,
+  });
+
+  const embed = new EmbedBuilder()
+    .setColor(BRAND_COLOR)
+    .setTitle(result.liveSession.status === 'ended' ? '📝 Ended Live Session Updated' : '📝 Live Session Updated')
+    .setDescription(buildLiveSessionSummaryLine(result.liveSession, result.people))
+    .addFields(
+      { name: 'Players', value: truncate(formatLiveSessionPeople(result.people, 'player')) },
+      { name: 'Spectators', value: truncate(formatLiveSessionPeople(result.people, 'spectator')) },
+    )
+    .setFooter({ text: 'Draft only: official stats move only on finalize' })
+    .setTimestamp();
+
+  if (result.liveSession.notes) {
+    embed.addFields({ name: 'Notes', value: result.liveSession.notes });
+  }
+
+  return interaction.editReply({ embeds: [embed], allowedMentions: { parse: [] } });
+}
+
+async function handleLiveSessionEnd(interaction) {
+  const liveSessionId = interaction.options.getString('live_session_id', true);
+  const result = await endLiveSession({
+    guildId: interaction.guildId,
+    liveSessionId,
+    actorDiscordId: interaction.user.id,
+    notes: interaction.options.getString('notes') ?? undefined,
+    requestId: interaction.id,
+  });
+
+  const embed = new EmbedBuilder()
+    .setColor(BRAND_COLOR)
+    .setTitle('⏹️ Live Session Ended')
+    .setDescription(buildLiveSessionSummaryLine(result.liveSession, result.people))
+    .addFields(
+      { name: 'Players', value: truncate(formatLiveSessionPeople(result.people, 'player')) },
+      { name: 'Spectators', value: truncate(formatLiveSessionPeople(result.people, 'spectator')) },
+      { name: 'Duration', value: formatDurationMinutes(result.liveSession.started_at, result.liveSession.ended_at), inline: true },
+    )
+    .setFooter({ text: 'Ready for finalize when the result draft looks correct' })
+    .setTimestamp();
+
+  if (result.liveSession.notes) {
+    embed.addFields({ name: 'Notes', value: result.liveSession.notes });
+  }
+
+  return interaction.editReply({ embeds: [embed], allowedMentions: { parse: [] } });
+}
+
+async function handleSessionFinalize(interaction) {
+  const candidateId = interaction.options.getString('candidate_id');
+  const liveSessionId = interaction.options.getString('live_session_id');
+  if (Boolean(candidateId) === Boolean(liveSessionId)) {
+    return interaction.editReply('❌ Choose exactly one finalize source: either `candidate_id` or `live_session_id`.');
+  }
+
+  const scheduledSessionId = interaction.options.getString('scheduled_session_id') || null;
+  const notesInput = interaction.options.getString('notes');
+  const participantMentions = interaction.options.getString('players');
+  const winnerMention = interaction.options.getString('winner');
+  const mvpMention = interaction.options.getString('mvp');
+  const participantIds = participantMentions
+    ? await resolveMentionedGuildUserIds(interaction, participantMentions, { fieldName: 'players' })
+    : null;
+  const winnerId = winnerMention
+    ? (await resolveMentionedGuildUserIds(interaction, winnerMention, { fieldName: 'winner', requireSingle: true }))[0]
+    : null;
+  const mvpId = mvpMention
+    ? (await resolveMentionedGuildUserIds(interaction, mvpMention, { fieldName: 'mvp', requireSingle: true }))[0]
+    : null;
+
+  if (candidateId) {
+    const result = await finalizeSessionCandidate({
+      requestId: interaction.id,
+      guildId: interaction.guildId,
+      candidateId,
+      actorDiscordId: interaction.user.id,
+      scheduledSessionId,
+      participantIds,
+      notes: notesInput || null,
+      winnerId,
+      mvpId,
+    });
+
+    const embed = new EmbedBuilder()
+      .setColor(BRAND_COLOR)
+      .setTitle('✅ Session Candidate Finalized')
+      .addFields(
+        { name: 'Candidate', value: result.candidate ? `${buildCandidateDisplayLabel(result.candidate)}\n\`${candidateId}\`` : `\`${candidateId}\`` },
+        { name: 'Official Session', value: `\`${result.officialEvent.id}\`` },
+        { name: 'Game', value: result.officialEvent.game_type || '—', inline: true },
+        { name: 'Type', value: result.officialEvent.session_type || '—', inline: true },
+        { name: 'Participants', value: `${result.officialEvent.participant_ids?.length || 0}`, inline: true },
+        { name: 'Roster Source', value: `\`${formatLockinSelectionSource(result.participantSource)}\``, inline: true },
+        { name: 'Roster', value: truncate((result.officialEvent.participant_ids || []).map(id => `<@${id}>`).join(', ') || '—') },
+      )
+      .setFooter({ text: result.statsRebuilt ? 'Stats rebuilt successfully' : 'Stats repair queued' })
+      .setTimestamp();
+
+    if (result.officialEvent.scheduled_session_id) {
+      embed.addFields({
+        name: 'Scheduled Session',
+        value: `\`${result.officialEvent.scheduled_session_id}\``,
+      });
+    }
+
+    if (result.duplicate) {
+      embed.addFields({
+        name: 'ℹ️ Duplicate Request',
+        value: 'This finalize request was already applied earlier. No extra official session was created.',
+      });
+    }
+
+    return interaction.editReply({ embeds: [embed], allowedMentions: { parse: [] } });
+  }
+
+  const result = await finalizeLiveSession({
+    requestId: interaction.id,
+    guildId: interaction.guildId,
+    liveSessionId,
+    actorDiscordId: interaction.user.id,
+    participantIds,
+    scheduledSessionId,
+    notes: notesInput ?? undefined,
+    winnerId: winnerId ?? undefined,
+    mvpId: mvpId ?? undefined,
+  });
+
+  const embed = new EmbedBuilder()
+    .setColor(BRAND_COLOR)
+    .setTitle('✅ Live Session Finalized')
+    .addFields(
+      { name: 'Live Session', value: `${buildLiveSessionDisplayLabel(result.liveSession)}\n\`${result.liveSession.id}\`` },
       { name: 'Official Session', value: `\`${result.officialEvent.id}\`` },
       { name: 'Game', value: result.officialEvent.game_type || '—', inline: true },
       { name: 'Type', value: result.officialEvent.session_type || '—', inline: true },
@@ -538,6 +882,13 @@ async function handleCandidateFinalize(interaction) {
     embed.addFields({
       name: 'Scheduled Session',
       value: `\`${result.officialEvent.scheduled_session_id}\``,
+    });
+  }
+
+  if (result.liveSession.source_candidate_id) {
+    embed.addFields({
+      name: 'Consumed Candidate',
+      value: `\`${result.liveSession.source_candidate_id}\``,
     });
   }
 
@@ -703,6 +1054,78 @@ module.exports = {
     )
     .addSubcommand(subcommand =>
       subcommand
+        .setName('start')
+        .setDescription('Start a live draft session from a closed candidate, a schedule, or a tracked voice channel')
+        .addStringOption(option =>
+          option
+            .setName('candidate_id')
+            .setDescription('Optional closed candidate to preload players and spectators')
+            .setRequired(false)
+            .setMaxLength(36)
+            .setAutocomplete(true)
+        )
+        .addStringOption(option =>
+          option
+            .setName('scheduled_session_id')
+            .setDescription('Optional scheduled session to start from')
+            .setRequired(false)
+            .setMaxLength(36)
+            .setAutocomplete(true)
+        )
+        .addChannelOption(option =>
+          option
+            .setName('channel')
+            .setDescription('Optional voice channel for tracked-VC or schedule start')
+            .addChannelTypes(ChannelType.GuildVoice)
+            .setRequired(false)
+        )
+        .addStringOption(option => option.setName('game').setDescription('Optional live game override').setRequired(false).setMaxLength(80))
+        .addStringOption(option =>
+          option
+            .setName('session_type')
+            .setDescription('Optional live session type override')
+            .setRequired(false)
+            .addChoices(
+              { name: 'Competitive', value: 'competitive' },
+              { name: 'Casual', value: 'casual' },
+            )
+        )
+        .addStringOption(option => option.setName('notes').setDescription('Optional live session notes').setRequired(false).setMaxLength(300))
+    )
+    .addSubcommand(subcommand =>
+      subcommand
+        .setName('update')
+        .setDescription('Update the draft players, spectators, result, or notes for a live session')
+        .addStringOption(option =>
+          option
+            .setName('live_session_id')
+            .setDescription('Select a recent live or ended session')
+            .setRequired(true)
+            .setMaxLength(36)
+            .setAutocomplete(true)
+        )
+        .addStringOption(option => option.setName('players').setDescription('Optional player roster replacement using mentions').setRequired(false).setMaxLength(500))
+        .addStringOption(option => option.setName('spectators').setDescription('Optional spectator roster replacement using mentions').setRequired(false).setMaxLength(500))
+        .addStringOption(option => option.setName('winner').setDescription('Optional winner mention, e.g. @Nala').setRequired(false).setMaxLength(100))
+        .addStringOption(option => option.setName('mvp').setDescription('Optional MVP mention, e.g. @Nala').setRequired(false).setMaxLength(100))
+        .addStringOption(option => option.setName('notes').setDescription('Optional updated live notes').setRequired(false).setMaxLength(300))
+    )
+    .addSubcommand(subcommand =>
+      subcommand
+        .setName('end')
+        .setDescription('Mark a live session as ended without moving official stats yet')
+        .addStringOption(option =>
+          option
+            .setName('live_session_id')
+            .setDescription('Select a recent live session')
+            .setRequired(true)
+            .setMaxLength(36)
+            .setAutocomplete(true)
+        )
+        .addStringOption(option => option.setName('notes').setDescription('Optional closing notes').setRequired(false).setMaxLength(300))
+    )
+    .addSubcommand(subcommand =>
+      subcommand
         .setName('schedule')
         .setDescription('Schedule a future session without affecting stats yet')
         .addStringOption(option => option.setName('game').setDescription('Default game label').setRequired(true).setMaxLength(80))
@@ -787,43 +1210,215 @@ module.exports = {
       subcommand
         .setName('candidate')
         .setDescription('Inspect one private VC-assisted session candidate')
-        .addStringOption(option => option.setName('candidate_id').setDescription('Full candidate UUID').setRequired(true).setMaxLength(36))
+        .addStringOption(option =>
+          option
+            .setName('candidate_id')
+            .setDescription('Select a recent candidate')
+            .setRequired(true)
+            .setMaxLength(36)
+            .setAutocomplete(true)
+        )
     )
     .addSubcommand(subcommand =>
       subcommand
         .setName('lockin')
         .setDescription('Create or replace a draft locked roster for a closed VC-assisted candidate')
-        .addStringOption(option => option.setName('candidate_id').setDescription('Full candidate UUID').setRequired(true).setMaxLength(36))
+        .addStringOption(option =>
+          option
+            .setName('candidate_id')
+            .setDescription('Select a recent closed candidate')
+            .setRequired(true)
+            .setMaxLength(36)
+            .setAutocomplete(true)
+        )
         .addStringOption(option => option.setName('players').setDescription('Optional roster override using mentions; defaults to threshold-qualified participants').setRequired(false).setMaxLength(500))
         .addStringOption(option => option.setName('notes').setDescription('Optional admin notes for this draft roster').setRequired(false).setMaxLength(300))
     )
     .addSubcommand(subcommand =>
       subcommand
         .setName('finalize')
-        .setDescription('Finalize a closed VC-assisted candidate into an official session')
-        .addStringOption(option => option.setName('candidate_id').setDescription('Full candidate UUID').setRequired(true).setMaxLength(36))
-        .addStringOption(option => option.setName('scheduled_session_id').setDescription('Optional scheduled session UUID to link during finalize').setRequired(false).setMaxLength(36))
+        .setDescription('Finalize a closed candidate or ended live session into an official session')
+        .addStringOption(option =>
+          option
+            .setName('candidate_id')
+            .setDescription('Select a recent closed candidate')
+            .setRequired(false)
+            .setMaxLength(36)
+            .setAutocomplete(true)
+        )
+        .addStringOption(option =>
+          option
+            .setName('live_session_id')
+            .setDescription('Select a recent ended live session')
+            .setRequired(false)
+            .setMaxLength(36)
+            .setAutocomplete(true)
+        )
+        .addStringOption(option =>
+          option
+            .setName('scheduled_session_id')
+            .setDescription('Optional scheduled session to link during finalize')
+            .setRequired(false)
+            .setMaxLength(36)
+            .setAutocomplete(true)
+        )
         .addStringOption(option => option.setName('players').setDescription('Optional participant roster override using mentions').setRequired(false).setMaxLength(500))
-        .addUserOption(option => option.setName('winner').setDescription('Winner, if applicable').setRequired(false))
-        .addUserOption(option => option.setName('mvp').setDescription('MVP, if applicable').setRequired(false))
+        .addStringOption(option => option.setName('winner').setDescription('Optional winner mention, e.g. @Nala').setRequired(false).setMaxLength(100))
+        .addStringOption(option => option.setName('mvp').setDescription('Optional MVP mention, e.g. @Nala').setRequired(false).setMaxLength(100))
         .addStringOption(option => option.setName('notes').setDescription('Optional official session notes').setRequired(false).setMaxLength(300))
     )
     .addSubcommand(subcommand =>
       subcommand
         .setName('discard')
         .setDescription('Discard a VC-assisted session candidate')
-        .addStringOption(option => option.setName('candidate_id').setDescription('Full candidate UUID').setRequired(true).setMaxLength(36))
+        .addStringOption(option =>
+          option
+            .setName('candidate_id')
+            .setDescription('Select a recent candidate')
+            .setRequired(true)
+            .setMaxLength(36)
+            .setAutocomplete(true)
+        )
         .addStringOption(option => option.setName('reason').setDescription('Why this candidate should be discarded').setRequired(true).setMaxLength(300))
     ),
 
+  async autocomplete(interaction) {
+    const subcommand = resolveAutocompleteSubcommand(interaction);
+    const focused = interaction.options.getFocused(true);
+
+    if (!interaction.guildId) {
+      return interaction.respond([]);
+    }
+
+    const requiredPermission = requiresManageGuild(subcommand)
+      ? PermissionFlagsBits.ManageGuild
+      : PermissionFlagsBits.ManageEvents;
+    if (!hasAutocompletePermission(interaction, requiredPermission)) {
+      logger.warn('session_autocomplete_permission_unresolved', {
+        request_id: interaction.id,
+        guild_id: interaction.guildId,
+        actor_id: interaction.user?.id,
+        subcommand,
+        focused_option: focused.name,
+        has_member_permissions: Boolean(interaction.memberPermissions),
+        has_member_permissions_fallback: Boolean(interaction.member?.permissions),
+      });
+      return interaction.respond([]);
+    }
+
+    const search = String(focused.value || '').trim().toLowerCase();
+
+    if (focused.name === 'candidate_id') {
+      const statusMap = {
+        candidate: ['open', 'closed', 'finalized', 'discarded'],
+        lockin: ['closed'],
+        start: ['closed'],
+        finalize: ['closed'],
+        discard: ['open', 'closed', 'discarded'],
+      };
+
+      const statuses = statusMap[subcommand];
+      if (!statuses) {
+        logger.warn('session_candidate_autocomplete_unmapped_subcommand', {
+          request_id: interaction.id,
+          guild_id: interaction.guildId,
+          actor_id: interaction.user?.id,
+          subcommand,
+          focused_option: focused.name,
+        });
+        return interaction.respond([]);
+      }
+
+      const recentCandidates = await listSessionCandidates(interaction.guildId, {
+        statuses,
+        limit: search ? 100 : 25,
+      });
+
+      const filteredCandidates = search
+        ? recentCandidates.filter(candidate => buildCandidateSearchText(candidate).includes(search))
+        : recentCandidates;
+
+      if (!filteredCandidates.length) {
+        logger.warn('session_candidate_autocomplete_empty', {
+          request_id: interaction.id,
+          guild_id: interaction.guildId,
+          actor_id: interaction.user?.id,
+          subcommand,
+          focused_option: focused.name,
+          status_filter: statuses,
+          search_present: Boolean(search),
+          candidate_count_before_filter: recentCandidates.length,
+          candidate_count_after_filter: filteredCandidates.length,
+        });
+      }
+
+      return interaction.respond(
+        filteredCandidates.slice(0, 25).map(candidate => ({
+          name: buildCandidateAutocompleteName(candidate),
+          value: candidate.id,
+        }))
+      );
+    }
+
+    if (focused.name === 'live_session_id') {
+      const statusMap = {
+        update: ['live', 'ended'],
+        end: ['live'],
+        finalize: ['ended'],
+      };
+
+      const statuses = statusMap[subcommand];
+      if (!statuses) {
+        return interaction.respond([]);
+      }
+
+      const liveSessions = await listLiveSessions(interaction.guildId, {
+        statuses,
+        limit: 20,
+      });
+
+      const filteredLiveSessions = search
+        ? liveSessions.filter(session => buildLiveSessionSearchText(session).includes(search))
+        : liveSessions;
+
+      return interaction.respond(
+        filteredLiveSessions.slice(0, 25).map(liveSession => ({
+          name: buildLiveSessionAutocompleteName(liveSession),
+          value: liveSession.id,
+        }))
+      );
+    }
+
+    if (focused.name === 'scheduled_session_id') {
+      const scheduledSessions = await listUpcomingScheduledSessions(interaction.guildId, { limit: 20 });
+      const filteredSessions = search
+        ? scheduledSessions.filter(session => buildScheduleSearchText(session).includes(search))
+        : scheduledSessions;
+
+      return interaction.respond(
+        filteredSessions.slice(0, 25).map(session => ({
+          name: buildScheduleAutocompleteName(session),
+          value: session.id,
+        }))
+      );
+    }
+
+    return interaction.respond([]);
+  },
+
   async execute(interaction) {
     const subcommand = interaction.options.getSubcommand();
+    const privateReply = requiresPrivateReply(subcommand);
     const requireManageGuild = requiresManageGuild(subcommand);
     const requiredPermission = requireManageGuild ? PermissionFlagsBits.ManageGuild : PermissionFlagsBits.ManageEvents;
     const requiredLabel = requireManageGuild ? 'Manage Server' : 'Manage Events';
 
     if (!interaction.memberPermissions?.has(requiredPermission)) {
       return interaction.reply({ content: `❌ You need ${requiredLabel} to use this session command.`, ephemeral: true });
+    }
+
+    if (privateReply) {
+      await interaction.deferReply({ ephemeral: true });
     }
 
     const throttle = checkMutationThrottle({
@@ -843,17 +1438,25 @@ module.exports = {
         scope: throttle.scope,
         retry_after_seconds: throttle.retryAfterSeconds,
       });
-      return interaction.reply({
-        content: `⏳ \`/session ${subcommand}\` is cooling down for this ${throttle.scope}. Try again in about ${throttle.retryAfterSeconds}s.`,
-        ephemeral: true,
-      });
+      const content = `⏳ \`/session ${subcommand}\` is cooling down for this ${throttle.scope}. Try again in about ${throttle.retryAfterSeconds}s.`;
+      if (privateReply) {
+        return interaction.editReply({ content });
+      }
+
+      return interaction.reply({ content, ephemeral: true });
     }
 
     if (!(await isSetup(interaction.guildId))) {
+      if (privateReply) {
+        return interaction.editReply({ content: '⚙️ Run `/setup` first!' });
+      }
+
       return interaction.reply({ content: '⚙️ Run `/setup` first!', ephemeral: true });
     }
 
-    await interaction.deferReply({ ephemeral: requiresPrivateReply(subcommand) });
+    if (!privateReply) {
+      await interaction.deferReply({ ephemeral: false });
+    }
 
     try {
       if (subcommand === 'correct') return handleManualCorrect(interaction);
@@ -865,7 +1468,10 @@ module.exports = {
       if (subcommand === 'candidates') return handleCandidatesList(interaction);
       if (subcommand === 'candidate') return handleCandidateDetail(interaction);
       if (subcommand === 'lockin') return handleSessionLockin(interaction);
-      if (subcommand === 'finalize') return handleCandidateFinalize(interaction);
+      if (subcommand === 'start') return handleLiveSessionStart(interaction);
+      if (subcommand === 'update') return handleLiveSessionUpdate(interaction);
+      if (subcommand === 'end') return handleLiveSessionEnd(interaction);
+      if (subcommand === 'finalize') return handleSessionFinalize(interaction);
       if (subcommand === 'discard') return handleCandidateDiscard(interaction);
 
       return interaction.editReply('❌ Unsupported session subcommand.');
