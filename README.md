@@ -96,12 +96,68 @@ Global deploys are blocked unless `GUILDRANK_ENV=production`.
 npm start
 ```
 
+Production start command:
+
+```bash
+npm start
+```
+
+This runs `node src/index.js`. GuildRank is a long-running Discord gateway worker, not a web app. It does not need an inbound HTTP server or a public port to stay alive. The process stays active through the Discord client connection and scheduled background jobs.
+
 On startup the bot:
 - validates required environment variables
 - validates the required migration versions are already applied
 - recovers any open VC sessions left over from restarts
 - resumes still-active voice sessions
 - rebuilds `player_stats` from source tables so stale streaks and old data drift are corrected
+
+## Railway deployment
+
+Use Railway as a persistent worker service so the bot keeps running when a local laptop sleeps, loses internet, closes the terminal, or crashes.
+
+1. Create a new Railway service from this GitHub repo.
+2. Set the Railway start command to `npm start`, or leave it blank if Railway detects the package start script.
+3. Add the required environment variables in Railway Variables. Use names only from `.env.example`; never paste values into Git history, docs, issues, screenshots, or logs.
+4. Set `GUILDRANK_ENV=production` for the production bot service. Use `staging` only for a separate staging bot, staging Discord app, and staging Supabase project.
+5. Apply all migrations to the target Supabase project before starting the service.
+6. Deploy slash commands separately. Use `npm run deploy:global` for production global commands. Use `npm run deploy:guild` only for non-production guild-scoped testing.
+7. Start or redeploy the Railway service.
+
+Required runtime environment variable names:
+
+```text
+GUILDRANK_ENV
+DISCORD_TOKEN
+DISCORD_CLIENT_ID
+SUPABASE_URL
+SUPABASE_SERVICE_KEY
+```
+
+Optional runtime environment variable names:
+
+```text
+APP_INSTANCE_ID
+NODE_ENV
+```
+
+`DISCORD_DEV_GUILD_ID` is only required when deploying guild-scoped commands with `npm run deploy:guild`.
+
+Healthy Railway logs should include:
+
+- `startup_validated`, which means env validation and migration checks passed.
+- `command_loaded` entries for slash command modules.
+- `event_loaded` entries for Discord event handlers.
+- `discord_ready`, which means Discord accepted the bot login and the gateway session is active.
+
+Logs that need immediate attention:
+
+- `startup_failed`
+- `Invalid environment configuration`
+- migration validation failures
+- Discord login errors
+- repeated `unhandled_rejection` or `uncaught_exception`
+
+Do not configure a Railway HTTP health check for this service unless a separate health endpoint is intentionally added later. GuildRank currently has no inbound HTTP server.
 
 ## Core commands
 

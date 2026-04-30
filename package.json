@@ -3,6 +3,9 @@
   "version": "2.0.0",
   "description": "GuildRank — hosted multi-server Discord bot. One invite link, zero setup.",
   "main": "src/index.js",
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
