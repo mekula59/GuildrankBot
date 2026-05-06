@@ -159,14 +159,13 @@ async function recordLiveSessionConfirmation({
   if (error) throw error;
 
   const nextRoster = applyConfirmationToRoster(before.people, discordUserId, response);
-  const deleteExisting = supabase
+  const { error: deleteError } = await supabase
     .from('live_session_people')
     .delete()
     .eq('live_session_id', liveSessionId)
     .eq('guild_id', guildId)
     .eq('discord_user_id', discordUserId);
 
-  const { error: deleteError } = await deleteExisting;
   if (deleteError) throw deleteError;
 
   if (response !== 'not_in_session') {

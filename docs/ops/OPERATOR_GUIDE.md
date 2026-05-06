@@ -216,6 +216,42 @@ Players and spectators must be different people.
 
 Winner and MVP must be players.
 
+### `/session checkin_open`
+
+Opens player self check-in for a running live session.
+
+GuildRank posts a check-in prompt with three buttons:
+
+- ✅ Playing
+- 👀 Spectating
+- ❌ Not in this session
+
+When a member clicks a button, GuildRank updates the live draft roster:
+
+- Playing moves them into players.
+- Spectating moves them into spectators.
+- Not in this session removes them from the live roster but keeps their response for history.
+
+Self check-in is draft input only. It helps reduce operator work, but it does not finalize stats.
+
+### `/session checkin_close`
+
+Closes player self check-in for the running live session.
+
+Use this when the roster is stable or before ending the session.
+
+### `/session checkin_summary`
+
+Shows check-in responses for the live session:
+
+- confirmed players
+- confirmed spectators
+- not in session
+- no response yet, when GuildRank can infer known detected-session participants
+- current draft players and spectators
+
+Operators should review this summary before ending and finalizing the session.
+
 ### `/session end`
 
 Marks the live session as ended.

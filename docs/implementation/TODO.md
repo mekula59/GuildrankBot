@@ -19,7 +19,7 @@ This file tracks the most important remaining work in grouped product and rollou
 ## Product improvements
 
 - Add a dedicated read-only view for current live sessions so operators can inspect draft state without updating it.
-- Add a safe player-facing confirmation layer without letting self-reporting become official truth automatically.
+- Improve player self check-in summaries without letting self-reporting become official truth automatically.
 - Improve planned-session review during finalize without turning schedule context into automatic truth.
 - Improve operator visibility into which roster source was used during finalization.
 - Add clearer history views for discarded detected sessions, lock-in changes, and live-session updates.
@@ -38,7 +38,6 @@ This file tracks the most important remaining work in grouped product and rollou
 
 ## Explicitly not implemented yet
 
-- player self-check-in
 - public lock-in workflow
 - automatic finalize
 - automatic official credit from VC occupancy alone

@@ -36,8 +36,8 @@ create index if not exists idx_live_session_confirmations_guild_user_updated
 
 alter table live_session_confirmations enable row level security;
 
-insert into schema_migrations (version, description)
-values ('016_live_session_confirmations', 'Live session participant self-confirmation draft layer')
+insert into schema_migrations (version, name)
+values ('016_live_session_checkins', 'Live session participant self check-in draft layer')
 on conflict (version) do nothing;
 
 commit;

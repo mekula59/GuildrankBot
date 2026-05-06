@@ -199,7 +199,7 @@ These rules are intentional. They prevent duplicate or contradictory official re
 
 VC-assisted capture is strong enough for staged use, but it still has limits:
 
-- no player self-check-in yet
+- player self check-in is available only during running live sessions and still requires operator finalize
 - no automatic finalize
 - no live-session auto-sync after start
 - planned-session matches stay advisory

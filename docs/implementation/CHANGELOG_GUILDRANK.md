@@ -142,12 +142,12 @@ Key outcomes:
 - clearer `/session start` source labels
 - operator-facing rename from internal candidate language to detected-session language
 - clearer duplicate-start failures for live-session starts
+- live-session participant self check-in as draft roster input
 
 ## Current known limits
 
 These areas are still intentionally unfinished:
 
-- no player self-check-in
 - no public lock-in flow
 - no automatic finalize
 - no live-session auto-sync after start

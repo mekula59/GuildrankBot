@@ -42,7 +42,7 @@ const {
   listLiveSessionConfirmations,
   recordLiveSessionConfirmation,
   setLiveSessionCheckinStatus,
-} = require('../utils/liveSessionConfirmations');
+} = require('../utils/liveSessionCheckins');
 const { checkMutationThrottle } = require('../utils/throttle');
 const logger = require('../utils/logger');
 const { BRAND_COLOR } = require('../../config/constants');
@@ -406,15 +406,15 @@ function buildCheckinButtons(liveSessionId) {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId(buildCheckinCustomId(liveSessionId, 'playing'))
-      .setLabel('Playing')
+      .setLabel('✅ Playing')
       .setStyle(ButtonStyle.Success),
     new ButtonBuilder()
       .setCustomId(buildCheckinCustomId(liveSessionId, 'spectating'))
-      .setLabel('Spectating')
+      .setLabel('👀 Spectating')
       .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
       .setCustomId(buildCheckinCustomId(liveSessionId, 'not_in_session'))
-      .setLabel('Not in this session')
+      .setLabel('❌ Not in this session')
       .setStyle(ButtonStyle.Danger),
   );
 }
@@ -1023,7 +1023,7 @@ async function handleLiveSessionCheckinOpen(interaction) {
     allowedMentions: { parse: [] },
   });
 
-  return interaction.editReply('✅ Check-in is open. I posted the player confirmation prompt in this channel.');
+  return interaction.editReply('✅ Check-in is open. I posted the player check-in prompt in this channel.');
 }
 
 async function handleLiveSessionCheckinClose(interaction) {

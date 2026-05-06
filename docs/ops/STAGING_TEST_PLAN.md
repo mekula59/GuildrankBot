@@ -68,6 +68,20 @@ Verify the detail view shows:
 5. Run `/session lockin` without `players`.
 6. Verify the draft defaults to threshold-qualified candidate participants.
 
+## Live session check-in checks
+
+1. Start a live session from a closed detected session.
+2. Run `/session checkin_open`.
+3. Confirm the bot posts `GuildRank Session Check-In` with ✅ Playing, 👀 Spectating, and ❌ Not in this session buttons.
+4. Click Playing as one human member.
+5. Click Spectating as another human member.
+6. Click Not in this session as a member already in the draft roster.
+7. Run `/session checkin_summary`.
+8. Verify confirmed players, confirmed spectators, not in session, and current draft roster sections are correct.
+9. Run `/session checkin_close`.
+10. Click an old button again and verify the response is rejected because check-in is closed.
+11. Verify official stats do not change from check-in activity.
+
 ## Finalize checks
 
 1. Finalize a closed candidate without passing `players`.

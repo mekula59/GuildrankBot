@@ -148,5 +148,5 @@ Planned sessions are intentionally modest in scope right now:
 - they do not auto-create official results
 - they do not auto-credit players
 - they do not auto-override detected-session context
-- they do not provide player check-in yet
+- player check-in belongs to running live sessions, not planned sessions by themselves
 - they still rely on operator finalization

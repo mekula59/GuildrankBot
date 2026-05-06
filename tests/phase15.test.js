@@ -121,7 +121,7 @@ test('migration bundle includes current schema extensions', () => {
   assert.ok(versions.includes('013_session_lockin_drafts'));
   assert.ok(versions.includes('014_live_sessions'));
   assert.ok(versions.includes('015_guild_runtime_config'));
-  assert.ok(versions.includes('016_live_session_confirmations'));
+  assert.ok(versions.includes('016_live_session_checkins'));
 });
 
 test('threshold reached time comes from the nth active member join', () => {
@@ -313,7 +313,7 @@ test('live session roster update preserves omitted role and rejects overlap', ()
   });
 });
 
-test('live session confirmation moves one member without duplicating roster roles', () => {
+test('live session check-in moves one member without duplicating roster roles', () => {
   const playing = applyConfirmationToRoster([
     { roster_role: 'spectator', discord_user_id: 'user-1' },
     { roster_role: 'player', discord_user_id: 'user-2' },

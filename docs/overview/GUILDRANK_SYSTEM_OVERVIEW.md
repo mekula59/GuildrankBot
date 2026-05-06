@@ -250,6 +250,7 @@ These do not affect stats by themselves:
 - observed people
 - lock-in drafts
 - live sessions
+- participant self check-ins
 
 These do affect stats:
 
@@ -267,13 +268,13 @@ Implemented now:
 - conservative planned-session matching
 - lock-in drafts
 - live sessions
+- participant self check-in for live sessions
 - finalize and discard flows
 - operator slash commands
 - recovery warm-up guardrails
 
 Not implemented now:
 
-- player self-check-in
 - public lock-in flow
 - automatic finalize
 - live-session auto-sync after start
