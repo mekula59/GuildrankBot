@@ -5,6 +5,10 @@ const { checkMutationThrottle, resetThrottleState } = require('../src/utils/thro
 const { buildVcCreditDecision } = require('../src/utils/vcCredit');
 const { getDigestKey } = require('../src/utils/digestKey');
 const {
+  buildRewardParticipantIds,
+  formatRewardSummary,
+} = require('../src/utils/participantRewards');
+const {
   DEFAULT_DIGEST_TIME_UTC,
   shouldSendDigestForConfig,
 } = require('../src/utils/weeklyDigestSchedule');
@@ -87,6 +91,8 @@ test('guild runtime config falls back to announce channel for digest and badges'
   assert.equal(config.digest_channel_id, 'announce-1');
   assert.deepEqual(config.operator_role_ids, ['role-1']);
   assert.equal(config.game_catalog_enabled, false);
+  assert.equal(config.participant_reward_enabled, false);
+  assert.equal(config.participant_reward_scope, 'players_only');
 });
 
 test('weekly digest preserves default UTC send time and supports configured time', () => {
@@ -123,6 +129,7 @@ test('migration bundle includes current schema extensions', () => {
   assert.ok(versions.includes('014_live_sessions'));
   assert.ok(versions.includes('015_guild_runtime_config'));
   assert.ok(versions.includes('016_live_session_checkins'));
+  assert.ok(versions.includes('017_participant_reward_roles'));
 });
 
 test('threshold reached time comes from the nth active member join', () => {
@@ -345,4 +352,35 @@ test('live session check-in result guard only blocks the current winner or MVP',
     winner_discord_user_id: null,
     mvp_discord_user_id: '',
   }, 'spectator-1'), false);
+});
+
+test('participant rewards default to finalized players only', () => {
+  assert.deepEqual(buildRewardParticipantIds({
+    participantIds: ['user-1', 'user-2', 'user-1'],
+    people: [
+      { discord_user_id: 'spectator-1', roster_role: 'spectator' },
+    ],
+    scope: 'players_only',
+  }), ['user-1', 'user-2']);
+
+  assert.deepEqual(buildRewardParticipantIds({
+    participantIds: ['user-1'],
+    people: [
+      { discord_user_id: 'spectator-1', roster_role: 'spectator' },
+      { discord_user_id: 'user-1', roster_role: 'player' },
+    ],
+    scope: 'players_and_spectators',
+  }), ['user-1', 'spectator-1']);
+});
+
+test('participant reward summary explains disabled and permission states', () => {
+  assert.equal(formatRewardSummary({ enabled: false }), 'Participant reward role is disabled.');
+  assert.match(formatRewardSummary({
+    enabled: true,
+    roleId: 'role-1',
+    assigned: 0,
+    skipped: 0,
+    failed: 0,
+    reason: 'missing_permission_or_hierarchy',
+  }), /Manage Roles/);
 });

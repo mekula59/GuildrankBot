@@ -5,6 +5,9 @@ const DEFAULT_RUNTIME_CONFIG = {
   digest_channel_id: null,
   operator_role_ids: [],
   game_catalog_enabled: false,
+  participant_reward_role_id: null,
+  participant_reward_enabled: false,
+  participant_reward_scope: 'players_only',
 };
 
 function normalizeOptionalString(value) {
@@ -16,6 +19,10 @@ function normalizeOptionalString(value) {
 function normalizeOperatorRoleIds(value) {
   if (!Array.isArray(value)) return [];
   return [...new Set(value.map(normalizeOptionalString).filter(Boolean))];
+}
+
+function normalizeParticipantRewardScope(value) {
+  return value === 'players_and_spectators' ? 'players_and_spectators' : 'players_only';
 }
 
 function normalizeGuildRuntimeConfig(config = null) {
@@ -33,10 +40,14 @@ function normalizeGuildRuntimeConfig(config = null) {
     digest_channel_id: digestChannelId,
     operator_role_ids: normalizeOperatorRoleIds(config.operator_role_ids),
     game_catalog_enabled: config.game_catalog_enabled === true,
+    participant_reward_role_id: normalizeOptionalString(config.participant_reward_role_id),
+    participant_reward_enabled: config.participant_reward_enabled === true,
+    participant_reward_scope: normalizeParticipantRewardScope(config.participant_reward_scope),
   };
 }
 
 module.exports = {
   DEFAULT_RUNTIME_CONFIG,
   normalizeGuildRuntimeConfig,
+  normalizeParticipantRewardScope,
 };

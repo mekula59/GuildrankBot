@@ -44,6 +44,39 @@ Before using the session workflows:
 - apply the latest database migrations
 - redeploy slash commands after command name or option name changes
 
+## Participant reward role
+
+GuildRank can assign a Discord role to finalized players after a game night.
+
+This is intentionally tied to finalization:
+
+- no reward role is assigned from voice activity alone
+- no reward role is assigned from player self check-in
+- no reward role is assigned when a live session starts or ends
+- the reward role is assigned only after `/session finalize` succeeds
+
+This keeps the trust model clear: evidence plus confirmation plus operator approval becomes the official reward.
+
+### `/setup_reward role`
+
+Sets the Discord role GuildRank should assign to finalized players.
+
+GuildRank checks whether the bot can manage that role before saving it. If setup fails, give the bot `Manage Roles` and move the GuildRank bot role above the reward role.
+
+### `/setup_reward enabled`
+
+Turns participant reward role assignment on or off.
+
+### `/setup_reward scope`
+
+Chooses who can receive the role.
+
+The first supported production behavior is `players_only`. `players_and_spectators` is reserved for communities that explicitly choose that scope later.
+
+### `/setup_reward status`
+
+Shows the current reward role settings.
+
 ## How a normal game night flows
 
 GuildRank fits a game-night flow that looks like this:
@@ -307,6 +340,7 @@ These do not change stats by themselves:
 - live sessions
 - ended live sessions
 - discarded detected sessions
+- participant reward role assignment
 
 These do change stats:
 
@@ -324,8 +358,9 @@ For most communities, this is the safest pattern:
 4. Review the detected session.
 5. Save a lock-in draft if the observed roster needs cleanup.
 6. Start a live session if you want to manage players, spectators, winner, MVP, and notes during the game.
-7. End the live session when the game finishes.
-8. Finalize the result once the roster and outcome are correct.
+7. Open player self check-in if you want players to confirm their role.
+8. End the live session when the game finishes.
+9. Finalize the result once the roster and outcome are correct.
 
 ## Common mistakes to avoid
 
@@ -338,7 +373,6 @@ For most communities, this is the safest pattern:
 ## Current limits operators should know
 
 - GuildRank does not auto-finalize sessions.
-- Players cannot self-check in yet.
 - Lock-in is admin-only.
 - Live sessions do not keep auto-syncing with voice occupancy after start.
 - Planned session matches are advisory context, not automatic truth.

@@ -50,7 +50,18 @@ module.exports = {
 
     if (!interaction.isChatInputCommand()) return;
     const cmd = client.commands.get(interaction.commandName);
-    if (!cmd) return;
+    if (!cmd) {
+      logger.error('command_handler_missing', {
+        request_id: interaction.id,
+        guild_id: interaction.guildId,
+        actor_id: interaction.user.id,
+        command: interaction.commandName,
+      });
+      return interaction.reply({
+        content: '❌ This command is registered in Discord, but this bot instance does not have its handler loaded. Redeploy the Railway service from the latest commit and redeploy slash commands.',
+        ephemeral: true,
+      }).catch(() => {});
+    }
 
     logger.info('command_received', {
       request_id: interaction.id,

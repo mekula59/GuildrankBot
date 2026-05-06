@@ -82,6 +82,19 @@ Verify the detail view shows:
 10. Click an old button again and verify the response is rejected because check-in is closed.
 11. Verify official stats do not change from check-in activity.
 
+## Participant reward role checks
+
+1. Create or choose a test reward role below the GuildRank bot role.
+2. Run `/setup_reward role` with that role.
+3. Run `/setup_reward enabled enabled:true`.
+4. Run `/setup_reward scope scope:players_only`.
+5. Run `/setup_reward status` and verify the role, enabled state, and scope.
+6. Finalize a live session with at least one player.
+7. Verify finalized players receive the role.
+8. Verify spectators do not receive the role while scope is `players_only`.
+9. Remove the bot `Manage Roles` permission or move the reward role above the bot role in staging.
+10. Finalize another session and verify finalization succeeds while the reward summary reports the permission or hierarchy problem.
+
 ## Finalize checks
 
 1. Finalize a closed candidate without passing `players`.

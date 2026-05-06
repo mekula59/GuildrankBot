@@ -43,6 +43,10 @@ const {
   recordLiveSessionConfirmation,
   setLiveSessionCheckinStatus,
 } = require('../utils/liveSessionCheckins');
+const {
+  assignParticipantRewardRoles,
+  formatRewardSummary,
+} = require('../utils/participantRewards');
 const { checkMutationThrottle } = require('../utils/throttle');
 const logger = require('../utils/logger');
 const { BRAND_COLOR } = require('../../config/constants');
@@ -1094,6 +1098,13 @@ async function handleSessionFinalize(interaction) {
       winnerId,
       mvpId,
     });
+    const rewardSummary = await assignParticipantRewardRoles({
+      guild: interaction.guild,
+      guildId: interaction.guildId,
+      config: await getGuildConfig(interaction.guildId),
+      participantIds: result.officialEvent.participant_ids || [],
+      source: 'candidate_finalize',
+    });
 
     const embed = new EmbedBuilder()
       .setColor(BRAND_COLOR)
@@ -1106,6 +1117,7 @@ async function handleSessionFinalize(interaction) {
         { name: 'Participants', value: `${result.officialEvent.participant_ids?.length || 0}`, inline: true },
         { name: 'Roster Source', value: `\`${formatLockinSelectionSource(result.participantSource)}\``, inline: true },
         { name: 'Roster', value: truncate((result.officialEvent.participant_ids || []).map(id => `<@${id}>`).join(', ') || '—') },
+        { name: 'Participant Reward Role', value: truncate(formatRewardSummary(rewardSummary)) },
       )
       .setFooter({ text: result.statsRebuilt ? 'Stats rebuilt successfully' : 'Stats repair queued' })
       .setTimestamp();
@@ -1138,6 +1150,14 @@ async function handleSessionFinalize(interaction) {
     winnerId: winnerId ?? undefined,
     mvpId: mvpId ?? undefined,
   });
+  const rewardSummary = await assignParticipantRewardRoles({
+    guild: interaction.guild,
+    guildId: interaction.guildId,
+    config: await getGuildConfig(interaction.guildId),
+    participantIds: result.officialEvent.participant_ids || [],
+    people: result.people || [],
+    source: 'live_session_finalize',
+  });
 
   const embed = new EmbedBuilder()
     .setColor(BRAND_COLOR)
@@ -1150,6 +1170,7 @@ async function handleSessionFinalize(interaction) {
       { name: 'Participants', value: `${result.officialEvent.participant_ids?.length || 0}`, inline: true },
       { name: 'Roster Source', value: `\`${formatLockinSelectionSource(result.participantSource)}\``, inline: true },
       { name: 'Roster', value: truncate((result.officialEvent.participant_ids || []).map(id => `<@${id}>`).join(', ') || '—') },
+      { name: 'Participant Reward Role', value: truncate(formatRewardSummary(rewardSummary)) },
     )
     .setFooter({ text: result.statsRebuilt ? 'Stats rebuilt successfully' : 'Stats repair queued' })
     .setTimestamp();
