@@ -25,6 +25,7 @@ const {
   resolveFinalizeParticipantSelection,
 } = require('../src/utils/sessionLockinRoster');
 const {
+  applyConfirmationToRoster,
   partitionCandidateRoster,
   resolveLiveSessionRosterUpdate,
 } = require('../src/utils/liveSessionRoster');
@@ -120,6 +121,7 @@ test('migration bundle includes current schema extensions', () => {
   assert.ok(versions.includes('013_session_lockin_drafts'));
   assert.ok(versions.includes('014_live_sessions'));
   assert.ok(versions.includes('015_guild_runtime_config'));
+  assert.ok(versions.includes('016_live_session_confirmations'));
 });
 
 test('threshold reached time comes from the nth active member join', () => {
@@ -309,4 +311,22 @@ test('live session roster update preserves omitted role and rejects overlap', ()
     playerIds: ['user-1'],
     spectatorIds: ['user-3'],
   });
+});
+
+test('live session confirmation moves one member without duplicating roster roles', () => {
+  const playing = applyConfirmationToRoster([
+    { roster_role: 'spectator', discord_user_id: 'user-1' },
+    { roster_role: 'player', discord_user_id: 'user-2' },
+  ], 'user-1', 'playing');
+
+  assert.deepEqual(playing.map(row => ({ role: row.roster_role, user: row.discord_user_id })), [
+    { role: 'player', user: 'user-2' },
+    { role: 'player', user: 'user-1' },
+  ]);
+
+  const removed = applyConfirmationToRoster(playing, 'user-1', 'not_in_session');
+
+  assert.deepEqual(removed.map(row => ({ role: row.roster_role, user: row.discord_user_id })), [
+    { role: 'player', user: 'user-2' },
+  ]);
 });

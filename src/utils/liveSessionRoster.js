@@ -72,7 +72,32 @@ function resolveLiveSessionRosterUpdate(existingPeople = [], {
   };
 }
 
+function applyConfirmationToRoster(existingPeople = [], discordUserId, response) {
+  const next = existingPeople
+    .filter(row => row.discord_user_id !== discordUserId)
+    .map(row => ({ ...row }));
+
+  if (response === 'playing') {
+    next.push({
+      discord_user_id: discordUserId,
+      roster_role: 'player',
+      source: 'manual',
+    });
+  }
+
+  if (response === 'spectating') {
+    next.push({
+      discord_user_id: discordUserId,
+      roster_role: 'spectator',
+      source: 'manual',
+    });
+  }
+
+  return next;
+}
+
 module.exports = {
+  applyConfirmationToRoster,
   partitionCandidateRoster,
   resolveLiveSessionRosterUpdate,
 };

@@ -22,6 +22,13 @@ module.exports = {
       return;
     }
 
+    if (interaction.isButton()) {
+      const sessionCommand = client.commands.get('session');
+      if (sessionCommand?.handleButton && await sessionCommand.handleButton(interaction)) {
+        return;
+      }
+    }
+
     if (!interaction.isChatInputCommand()) return;
     const cmd = client.commands.get(interaction.commandName);
     if (!cmd) return;

@@ -1,5 +1,8 @@
 const {
   SlashCommandBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
   EmbedBuilder,
   PermissionFlagsBits,
   PermissionsBitField,
@@ -30,10 +33,16 @@ const {
 const {
   endLiveSession,
   finalizeLiveSession,
+  getLiveSessionWithPeople,
   listLiveSessions,
   startLiveSession,
   updateLiveSession,
 } = require('../utils/liveSessions');
+const {
+  listLiveSessionConfirmations,
+  recordLiveSessionConfirmation,
+  setLiveSessionCheckinStatus,
+} = require('../utils/liveSessionConfirmations');
 const { checkMutationThrottle } = require('../utils/throttle');
 const logger = require('../utils/logger');
 const { BRAND_COLOR } = require('../../config/constants');
@@ -116,6 +125,9 @@ function requiresPrivateReply(subcommand) {
     'start',
     'update',
     'end',
+    'checkin_open',
+    'checkin_close',
+    'checkin_summary',
     'finalize',
     'discard',
     'schedule',
@@ -377,6 +389,63 @@ function formatLiveSessionPeople(people, rosterRole) {
     .filter(row => row.roster_role === rosterRole)
     .map(row => `<@${row.discord_user_id}>`);
   return ids.length ? ids.join(', ') : '—';
+}
+
+function buildCheckinCustomId(liveSessionId, response) {
+  return `gr_checkin:${response}:${liveSessionId}`;
+}
+
+function parseCheckinCustomId(customId) {
+  const [prefix, response, liveSessionId] = String(customId || '').split(':');
+  if (prefix !== 'gr_checkin' || !response || !liveSessionId) return null;
+  if (!['playing', 'spectating', 'not_in_session'].includes(response)) return null;
+  return { response, liveSessionId };
+}
+
+function buildCheckinButtons(liveSessionId) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(buildCheckinCustomId(liveSessionId, 'playing'))
+      .setLabel('Playing')
+      .setStyle(ButtonStyle.Success),
+    new ButtonBuilder()
+      .setCustomId(buildCheckinCustomId(liveSessionId, 'spectating'))
+      .setLabel('Spectating')
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId(buildCheckinCustomId(liveSessionId, 'not_in_session'))
+      .setLabel('Not in this session')
+      .setStyle(ButtonStyle.Danger),
+  );
+}
+
+function formatConfirmationPeople(confirmations, response) {
+  const ids = confirmations
+    .filter(row => row.response === response)
+    .map(row => `<@${row.discord_user_id}>`);
+  return ids.length ? ids.join(', ') : '—';
+}
+
+async function buildCheckinSummaryFields(guildId, liveSession, people) {
+  const confirmations = await listLiveSessionConfirmations(guildId, liveSession.id);
+  let noResponse = [];
+
+  if (liveSession.source_candidate_id) {
+    const participants = await listCandidateParticipants(liveSession.source_candidate_id, guildId);
+    const responded = new Set(confirmations.map(row => row.discord_user_id));
+    noResponse = participants
+      .map(row => row.discord_user_id)
+      .filter(id => !responded.has(id));
+  }
+
+  return [
+    { name: 'Confirmed Players', value: truncate(formatConfirmationPeople(confirmations, 'playing')) },
+    { name: 'Confirmed Spectators', value: truncate(formatConfirmationPeople(confirmations, 'spectating')) },
+    { name: 'Not In Session', value: truncate(formatConfirmationPeople(confirmations, 'not_in_session')) },
+    { name: 'No Response Yet', value: truncate(noResponse.length ? noResponse.map(id => `<@${id}>`).join(', ') : '—') },
+    { name: 'Current Draft Players', value: truncate(formatLiveSessionPeople(people, 'player')) },
+    { name: 'Current Draft Spectators', value: truncate(formatLiveSessionPeople(people, 'spectator')) },
+  ];
 }
 
 function buildLiveSessionSummaryLine(liveSession, people = []) {
@@ -711,7 +780,7 @@ async function handleCandidatesList(interaction) {
 }
 
 async function handleCandidateDetail(interaction) {
-  const candidateId = getRenamedStringOption(interaction, 'detected_session', ['candidate', 'candidate_id'], true);
+  const candidateId = getRenamedStringOption(interaction, 'session', ['detected_session', 'candidate', 'candidate_id'], true);
   const candidate = await getSessionCandidateById(interaction.guildId, candidateId);
   if (!candidate) {
     return interaction.editReply('❌ Detected session not found in this server.');
@@ -918,6 +987,75 @@ async function handleLiveSessionEnd(interaction) {
   if (result.liveSession.notes) {
     embed.addFields({ name: 'Notes', value: result.liveSession.notes });
   }
+
+  return interaction.editReply({ embeds: [embed], allowedMentions: { parse: [] } });
+}
+
+async function handleLiveSessionCheckinOpen(interaction) {
+  const liveSessionId = getRenamedStringOption(interaction, 'live_session', 'live_session_id', true);
+  if (!interaction.channel?.isTextBased?.()) {
+    return interaction.editReply('❌ Check-in prompt can only be posted in a text-based channel.');
+  }
+
+  const result = await setLiveSessionCheckinStatus({
+    guildId: interaction.guildId,
+    liveSessionId,
+    actorDiscordId: interaction.user.id,
+    status: 'open',
+    requestId: interaction.id,
+  });
+
+  const prompt = new EmbedBuilder()
+    .setColor(BRAND_COLOR)
+    .setTitle('GuildRank Session Check-In')
+    .setDescription('Are you playing in this session, spectating, or not part of it? Your response helps the operator build the draft roster. It does not finalize stats by itself.')
+    .addFields(
+      { name: 'Live Session', value: buildLiveSessionDisplayLabel(result.liveSession) },
+      { name: 'Channel', value: `<#${result.liveSession.channel_id}>`, inline: true },
+      { name: 'Game', value: `\`${result.liveSession.game_key}\``, inline: true },
+    )
+    .setFooter({ text: 'Draft only: official stats move only on finalize' })
+    .setTimestamp();
+
+  await interaction.channel.send({
+    embeds: [prompt],
+    components: [buildCheckinButtons(liveSessionId)],
+    allowedMentions: { parse: [] },
+  });
+
+  return interaction.editReply('✅ Check-in is open. I posted the player confirmation prompt in this channel.');
+}
+
+async function handleLiveSessionCheckinClose(interaction) {
+  const liveSessionId = getRenamedStringOption(interaction, 'live_session', 'live_session_id', true);
+  const result = await setLiveSessionCheckinStatus({
+    guildId: interaction.guildId,
+    liveSessionId,
+    actorDiscordId: interaction.user.id,
+    status: 'closed',
+    requestId: interaction.id,
+  });
+
+  return interaction.editReply(`✅ Check-in is closed for ${buildLiveSessionDisplayLabel(result.liveSession)}.`);
+}
+
+async function handleLiveSessionCheckinSummary(interaction) {
+  const liveSessionId = getRenamedStringOption(interaction, 'live_session', 'live_session_id', true);
+  const result = await getLiveSessionWithPeople(interaction.guildId, liveSessionId);
+  if (!result.liveSession) {
+    return interaction.editReply('❌ Live session not found in this server.');
+  }
+  if (result.liveSession.status !== 'live') {
+    return interaction.editReply('❌ Check-in summary is only available while the live session is running in this slice.');
+  }
+
+  const embed = new EmbedBuilder()
+    .setColor(BRAND_COLOR)
+    .setTitle('🧾 Live Session Check-In Summary')
+    .setDescription(buildLiveSessionSummaryLine(result.liveSession, result.people))
+    .addFields(await buildCheckinSummaryFields(interaction.guildId, result.liveSession, result.people))
+    .setFooter({ text: 'Draft only: operator review and finalize are still required for official stats' })
+    .setTimestamp();
 
   return interaction.editReply({ embeds: [embed], allowedMentions: { parse: [] } });
 }
@@ -1159,6 +1297,55 @@ async function handleCandidateDiscard(interaction) {
   return interaction.editReply({ embeds: [embed], allowedMentions: { parse: [] } });
 }
 
+async function handleCheckinButton(interaction) {
+  const parsed = parseCheckinCustomId(interaction.customId);
+  if (!parsed) return false;
+
+  await interaction.deferReply({ ephemeral: true });
+
+  if (!interaction.guildId || !interaction.guild) {
+    await interaction.editReply('❌ Check-in only works inside a server.');
+    return true;
+  }
+
+  const member = interaction.member || await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
+  if (!member || interaction.user.bot) {
+    await interaction.editReply('❌ Only server members can check in for a live session.');
+    return true;
+  }
+
+  try {
+    await recordLiveSessionConfirmation({
+      guildId: interaction.guildId,
+      liveSessionId: parsed.liveSessionId,
+      discordUserId: interaction.user.id,
+      response: parsed.response,
+      source: 'button',
+      requestId: interaction.id,
+    });
+
+    const responseLabel = {
+      playing: 'playing',
+      spectating: 'spectating',
+      not_in_session: 'not in this session',
+    }[parsed.response];
+
+    await interaction.editReply(`✅ Your GuildRank check-in was saved as **${responseLabel}**. This is draft roster info only; official stats move only after an operator finalizes the session.`);
+  } catch (error) {
+    logger.error('session_checkin_button_failed', {
+      request_id: interaction.id,
+      guild_id: interaction.guildId,
+      actor_id: interaction.user?.id,
+      live_session_id: parsed.liveSessionId,
+      response: parsed.response,
+      error,
+    });
+    await interaction.editReply(`❌ Check-in was not saved. ${error.message || 'Ask an operator to review the live session.'}`);
+  }
+
+  return true;
+}
+
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('session')
@@ -1264,6 +1451,45 @@ module.exports = {
     )
     .addSubcommand(subcommand =>
       subcommand
+        .setName('checkin_open')
+        .setDescription('Open player self-confirmation for a running live session')
+        .addStringOption(option =>
+          option
+            .setName('live_session')
+            .setDescription('Select a running live session')
+            .setRequired(true)
+            .setMaxLength(36)
+            .setAutocomplete(true)
+        )
+    )
+    .addSubcommand(subcommand =>
+      subcommand
+        .setName('checkin_close')
+        .setDescription('Close player self-confirmation for a running live session')
+        .addStringOption(option =>
+          option
+            .setName('live_session')
+            .setDescription('Select a running live session')
+            .setRequired(true)
+            .setMaxLength(36)
+            .setAutocomplete(true)
+        )
+    )
+    .addSubcommand(subcommand =>
+      subcommand
+        .setName('checkin_summary')
+        .setDescription('Review player self-confirmation responses for a live session')
+        .addStringOption(option =>
+          option
+            .setName('live_session')
+            .setDescription('Select a running live session')
+            .setRequired(true)
+            .setMaxLength(36)
+            .setAutocomplete(true)
+        )
+    )
+    .addSubcommand(subcommand =>
+      subcommand
         .setName('schedule')
         .setDescription('Schedule a future session without affecting stats yet')
         .addStringOption(option => option.setName('game').setDescription('Default game label').setRequired(true).setMaxLength(80))
@@ -1350,7 +1576,7 @@ module.exports = {
         .setDescription('Inspect one detected session from private VC activity')
         .addStringOption(option =>
           option
-            .setName('detected_session')
+            .setName('session')
             .setDescription('Select a recent detected session')
             .setRequired(true)
             .setMaxLength(36)
@@ -1420,6 +1646,8 @@ module.exports = {
         .addStringOption(option => option.setName('reason').setDescription('Why this detected session should be discarded').setRequired(true).setMaxLength(300))
     ),
 
+  handleButton: handleCheckinButton,
+
   async autocomplete(interaction) {
     const subcommand = resolveAutocompleteSubcommand(interaction);
     const focused = interaction.options.getFocused(true);
@@ -1453,7 +1681,7 @@ module.exports = {
 
     const search = String(focused.value || '').trim().toLowerCase();
 
-    if (focused.name === 'detected_session' || focused.name === 'candidate' || focused.name === 'candidate_id') {
+    if (focused.name === 'session' || focused.name === 'detected_session' || focused.name === 'candidate' || focused.name === 'candidate_id') {
       const statusMap = {
         detected_session: ['open', 'closed', 'finalized', 'discarded'],
         candidate: ['open', 'closed', 'finalized', 'discarded'],
@@ -1543,6 +1771,9 @@ module.exports = {
       const statusMap = {
         update: ['live', 'ended'],
         end: ['live'],
+        checkin_open: ['live'],
+        checkin_close: ['live'],
+        checkin_summary: ['live'],
         finalize: ['ended'],
       };
 
@@ -1668,6 +1899,9 @@ module.exports = {
       if (subcommand === 'start') return handleLiveSessionStart(interaction);
       if (subcommand === 'update') return handleLiveSessionUpdate(interaction);
       if (subcommand === 'end') return handleLiveSessionEnd(interaction);
+      if (subcommand === 'checkin_open') return handleLiveSessionCheckinOpen(interaction);
+      if (subcommand === 'checkin_close') return handleLiveSessionCheckinClose(interaction);
+      if (subcommand === 'checkin_summary') return handleLiveSessionCheckinSummary(interaction);
       if (subcommand === 'finalize') return handleSessionFinalize(interaction);
       if (subcommand === 'discard') return handleCandidateDiscard(interaction);
 
