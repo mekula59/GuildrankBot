@@ -5,7 +5,10 @@ const {
   listLiveSessionPeople,
   normalizeLiveSession,
 } = require('./liveSessions');
-const { applyConfirmationToRoster } = require('./liveSessionRoster');
+const {
+  applyConfirmationToRoster,
+  isDraftResultHolder,
+} = require('./liveSessionRoster');
 
 const CHECKIN_RESPONSES = ['playing', 'spectating', 'not_in_session'];
 
@@ -132,14 +135,8 @@ async function recordLiveSessionConfirmation({
   if (before.liveSession.checkin_status !== 'open') {
     throw new Error('Check-in is closed for this live session.');
   }
-  if (
-    response !== 'playing'
-    && (
-      before.liveSession.winner_discord_user_id === discordUserId
-      || before.liveSession.mvp_discord_user_id === discordUserId
-    )
-  ) {
-    throw new Error('Ask an operator to update winner or MVP before leaving the player roster.');
+  if (response !== 'playing' && isDraftResultHolder(before.liveSession, discordUserId)) {
+    throw new Error('You are currently marked as winner or MVP for this draft. Ask an operator to clear or change that result before switching to spectator.');
   }
 
   const timestamp = new Date().toISOString();

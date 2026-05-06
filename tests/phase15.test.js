@@ -26,6 +26,7 @@ const {
 } = require('../src/utils/sessionLockinRoster');
 const {
   applyConfirmationToRoster,
+  isDraftResultHolder,
   partitionCandidateRoster,
   resolveLiveSessionRosterUpdate,
 } = require('../src/utils/liveSessionRoster');
@@ -329,4 +330,19 @@ test('live session check-in moves one member without duplicating roster roles', 
   assert.deepEqual(removed.map(row => ({ role: row.roster_role, user: row.discord_user_id })), [
     { role: 'player', user: 'user-2' },
   ]);
+});
+
+test('live session check-in result guard only blocks the current winner or MVP', () => {
+  const liveSession = {
+    winner_discord_user_id: 'winner-1',
+    mvp_discord_user_id: 'mvp-1',
+  };
+
+  assert.equal(isDraftResultHolder(liveSession, 'spectator-1'), false);
+  assert.equal(isDraftResultHolder(liveSession, 'winner-1'), true);
+  assert.equal(isDraftResultHolder(liveSession, ' mvp-1 '), true);
+  assert.equal(isDraftResultHolder({
+    winner_discord_user_id: null,
+    mvp_discord_user_id: '',
+  }, 'spectator-1'), false);
 });

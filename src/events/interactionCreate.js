@@ -24,8 +24,27 @@ module.exports = {
 
     if (interaction.isButton()) {
       const sessionCommand = client.commands.get('session');
-      if (sessionCommand?.handleButton && await sessionCommand.handleButton(interaction)) {
-        return;
+      if (sessionCommand?.handleButton) {
+        try {
+          if (await sessionCommand.handleButton(interaction)) {
+            return;
+          }
+        } catch (e) {
+          logger.error('button_interaction_failed', {
+            request_id: interaction.id,
+            guild_id: interaction.guildId,
+            actor_id: interaction.user?.id,
+            custom_id: interaction.customId,
+            error: e,
+          });
+          const response = { content: '❌ Button action failed. Please try again or ask an operator to review the live session.', ephemeral: true };
+          if (interaction.deferred || interaction.replied) {
+            await interaction.followUp(response).catch(() => {});
+            return;
+          }
+          await interaction.reply(response).catch(() => {});
+          return;
+        }
       }
     }
 

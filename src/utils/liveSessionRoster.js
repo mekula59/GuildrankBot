@@ -96,8 +96,25 @@ function applyConfirmationToRoster(existingPeople = [], discordUserId, response)
   return next;
 }
 
+function normalizeDiscordUserId(value) {
+  if (value == null) return null;
+  const normalized = String(value).trim();
+  return normalized || null;
+}
+
+function isDraftResultHolder(liveSession = {}, discordUserId) {
+  const normalizedUserId = normalizeDiscordUserId(discordUserId);
+  if (!normalizedUserId) return false;
+
+  return [
+    liveSession.winner_discord_user_id,
+    liveSession.mvp_discord_user_id,
+  ].some(resultUserId => normalizeDiscordUserId(resultUserId) === normalizedUserId);
+}
+
 module.exports = {
   applyConfirmationToRoster,
+  isDraftResultHolder,
   partitionCandidateRoster,
   resolveLiveSessionRosterUpdate,
 };
