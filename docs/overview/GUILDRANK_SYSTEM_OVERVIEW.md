@@ -1,174 +1,293 @@
 # GuildRank System Overview
 
-## Purpose
+GuildRank is a reusable Discord product for gaming communities that want trustworthy player records, not noisy guesses from voice chat.
 
-GuildRank is a reusable multi-community Discord product for gaming groups.
-It combines:
+It is built for real guilds where voice channels are not always tidy. A single voice channel might hold active players, spectators, hosts, moderators, and people who are only listening. That means GuildRank has to separate evidence from official truth.
 
-- passive VC activity tracking
-- manual session logging
-- VC-assisted session candidate discovery
-- scheduled session planning
-- admin-reviewed player lock-in
-- finalized official session records
+## The truth model
 
-GuildRank is not tied to one community layout. A guild can use fixed game rooms, generic lobby rooms, mixed social/game channels, or rotating schedules on the same VC.
+GuildRank is based on a layered truth model.
 
-## Core model
+- VC activity is evidence.
+- Detected sessions are evidence.
+- Lock-in is draft truth.
+- Live sessions are draft operational state.
+- Only finalized official events move official stats.
 
-GuildRank has several layers of session context. They are not all equal.
+This model is what keeps the system trustworthy across many different communities.
 
-### Tracked VC defaults
+## The main objects in plain English
 
-Tracked voice channels store saved defaults:
+### Tracked voice channels
 
-- default `game`
-- default `session_type`
-- advanced candidate thresholds
+Tracked voice channels are the places GuildRank watches.
 
-These defaults help GuildRank infer likely session context, but they are not official truth.
+Each tracked channel stores saved defaults:
 
-### Scheduled sessions
+- default game label
+- default session type
+- detection thresholds
 
-Scheduled sessions represent planned intent:
+These defaults help GuildRank make a good first guess. They are not official truth.
 
-- expected game
-- expected start time
-- expected session type
-- optional linked VC
-- optional host and notes
+### Planned sessions
 
-Schedules are guild-scoped and stored in UTC-safe form. A schedule does not affect stats by itself.
+Planned sessions are future sessions an operator schedules ahead of time.
 
-### Session candidates
+They describe expected intent:
 
-A session candidate is an automatically detected possible session in a tracked VC.
+- what game is expected
+- when it is expected
+- what type of session it is
+- which voice channel may be used
+- who is hosting
 
-It is built from voice presence evidence and includes:
+A planned session is a plan. It does not prove the session happened.
 
-- the tracked VC default profile snapshot
-- a time window
-- detected member count
-- candidate participant rows
-- optional matched schedule context
+### VC activity
 
-A candidate is evidence, not official truth.
+VC activity is the raw signal GuildRank sees from Discord voice presence.
 
-### Candidate participants
+It answers:
 
-Candidate participants are the observed people who were present in the candidate window.
+- who was in the channel
+- when they joined
+- when they left
 
-They represent:
+It does not answer who actually played.
 
-- observed people in the VC evidence window
-- time spent present in that window
-- threshold status
-- strength labels such as `strong`, `borderline`, or `weak`
+### Detected sessions
 
-Observed people are not automatically official players. This distinction is important because real VCs often contain spectators, hosts, moderators, listeners, and late joiners.
+Detected sessions are GuildRank's structured guess that a real session may have happened.
+
+Internally these records come from the session-candidate layer, but operators should think of them as detected sessions.
+
+Each detected session carries:
+
+- channel context
+- default game and session type context
+- start and end window
+- observed people
+- optional planned session context
+
+Detected sessions are still evidence.
+
+### Observed people
+
+Observed people are the members seen in the detected session window.
+
+GuildRank can track:
+
+- first seen time
+- last seen time
+- total presence time
+- whether the presence threshold was met
+- an evidence strength label
+
+Observed people are not the same thing as players.
 
 ### Lock-in drafts
 
-Lock-in drafts are the admin-reviewed draft roster for a candidate.
+Lock-in is the operator-reviewed draft player list for a detected session.
 
-They represent:
+It means:
 
-- the players an operator currently believes actually played
-- optional draft notes
-- the operator who locked them in
+"Based on the evidence and what I know, these are the real players."
 
-Lock-in is still draft state. It does not affect stats by itself.
+It is draft truth, not official truth.
 
-### Finalized official sessions
+### Live sessions
 
-A finalized official session is the only session-truth layer that should be treated as official for the VC-assisted flow.
+Live sessions are the operational draft layer used while a game is happening.
 
-Finalize creates:
+They can start from:
 
-- an `events` row
-- attendance rows
-- optional winner and MVP
-- optional scheduled session linkage
+- a detected session
+- a planned session
+- a tracked voice channel
 
-This is the official truth layer for VC-assisted sessions.
+They can hold:
 
-## What affects stats
+- players
+- spectators
+- winner
+- MVP
+- notes
+- real start and end times
 
-These sources affect stats:
+Live sessions are still draft state.
 
-- passive VC sessions and credited VC minutes
-- manual sessions created by `/session attendance`
-- manual competitive sessions created by `/session log`
-- finalized VC-assisted official sessions created by `/session finalize`
+### Finalized official events
 
-These sources do **not** affect stats by themselves:
+Finalized official events are the authoritative records that affect stats.
 
-- tracked VC defaults
-- scheduled sessions
-- session candidates
-- candidate participants
-- schedule auto-match context on candidates
-- lock-in drafts
+They can come from:
 
-## Current operator workflow
+- direct manual logging
+- finalized detected sessions
+- finalized ended live sessions
 
-### VC-assisted workflow
+This is the only layer that should be treated as official history.
 
-1. Use `/vc track` to save a default profile for a voice channel.
-2. Optionally tune thresholds with `/vc config`.
-3. Let GuildRank observe VC activity and open or close candidates automatically.
-4. Review candidates with `/session candidates` and `/session candidate`.
-5. Optionally save an admin draft roster with `/session lockin`.
-6. Finalize with `/session finalize` or discard with `/session discard`.
+## The full lifecycle
 
-### Scheduling workflow
+GuildRank is easiest to understand as a lifecycle.
 
-1. Create planned sessions with `/session schedule`.
-2. Review them with `/session upcoming`.
-3. Change plans with `/session reschedule` or `/session cancel`.
-4. During candidate review or finalize, use the schedule context as operator evidence.
+### 1. Plan the night
 
-### Manual logging workflow
+An operator can schedule a planned session if the community knows what is coming.
 
-For sessions that should be logged directly:
+This is where the "Friday CODM night" or "Sunday mixed games night" is recorded.
+
+### 2. Announce the night
+
+Many communities announce game nights in Discord before the session starts.
+
+That announcement step is part of the real workflow around GuildRank, even though it is not currently a GuildRank command.
+
+### 3. Detect voice activity
+
+GuildRank watches tracked voice channels and groups meaningful activity into a detected session.
+
+This is where the system says, "Something that looks like a game session happened here."
+
+### 4. Review the evidence
+
+The operator reviews the detected session:
+
+- who was observed
+- how long they were present
+- whether a planned session matched
+- whether the default game and session type look right
+
+### 5. Save draft truth
+
+If needed, the operator uses lock-in to say who actually played.
+
+This is the first strong human review layer, but it is still draft state.
+
+### 6. Run the live session
+
+If the operator wants to manage the game as it happens, they start a live session.
+
+During the live session they can separate:
+
+- players
+- spectators
+- winner
+- MVP
+- notes
+
+### 7. End the live session
+
+When the game is over, the live session is ended.
+
+It is still not official until finalized.
+
+### 8. Finalize the result
+
+Finalization creates the finalized official event and moves stats.
+
+This is the step that turns reviewed draft state into official truth.
+
+## Why this model matters
+
+Without these layers, GuildRank would make bad assumptions.
+
+A voice channel alone cannot tell you:
+
+- who played
+- who watched
+- who joined late
+- who should get official credit
+
+The layered model keeps GuildRank reusable across different guild cultures and different room layouts.
+
+## Current command surface
+
+### Voice channel defaults
+
+- `/vc track`
+- `/vc config`
+- `/vc list`
+- `/vc untrack`
+
+### Planned sessions
+
+- `/session schedule`
+- `/session upcoming`
+- `/session cancel`
+- `/session reschedule`
+
+### Detected sessions
+
+- `/session detected_sessions`
+- `/session detected_session`
+- `/session lockin`
+- `/session discard`
+
+### Live sessions
+
+- `/session start`
+- `/session update`
+- `/session end`
+- `/session finalize`
+
+### Direct manual official logging
 
 - `/session attendance`
 - `/session log`
 - `/session correct`
 
+## What affects stats
+
+These do not affect stats by themselves:
+
+- tracked voice channel defaults
+- planned sessions
+- VC activity
+- detected sessions
+- observed people
+- lock-in drafts
+- live sessions
+
+These do affect stats:
+
+- finalized official events
+
 ## Current implementation status
 
 Implemented now:
 
-- tracked VC defaults
-- passive VC presence ingestion
-- candidate detection and close logic
-- candidate participant aggregation
-- finalize and discard
-- tracked VC operator commands
-- scheduled sessions
-- schedule-aware candidate context
-- admin lock-in drafts
-- restart and redeploy recovery with warm-up delay
-- repair queue and basic smoke tests
+- tracked voice channel defaults
+- VC evidence ingestion
+- detected session creation and closing
+- observed participant aggregation
+- planned sessions
+- conservative planned-session matching
+- lock-in drafts
+- live sessions
+- finalize and discard flows
+- operator slash commands
+- recovery warm-up guardrails
 
 Not implemented now:
 
 - player self-check-in
-- public player-facing lock-in flow
+- public lock-in flow
 - automatic finalize
-- `/session live`
-- schedule-driven automatic override of candidate game or type
+- live-session auto-sync after start
+- automatic official credit from schedules alone
+- public live session feed
 - multi-channel session merging
 
-## Current production caveats
+## Current caveats
 
-GuildRank is stronger than the original Phase 1 baseline, but it is still not broad-production ready for large public rollout yet.
+GuildRank is usable, but it still benefits from careful operator review.
 
-Current known limitations:
+Important caveats:
 
-- startup recovery still depends on Discord cache state after a short warm-up, so false closures remain a risk during reconnect or redeploy edge cases
-- mutating command throttles are in-memory, so multi-instance throttle behavior is not yet fully enforced across instances
-- schedule matching is conservative and evidence-only; it does not automatically become official truth
-- lock-in is admin-only and draft-only; there is no player confirmation layer yet
-- automated coverage is still light compared with the amount of runtime state involved
+- Discord cache state can still matter during reconnect and redeploy recovery.
+- Voice evidence can still be noisy in messy community channels.
+- Planned session matches are advisory context, not automatic truth.
+- Live sessions are intentionally strict so one draft does not become many conflicting drafts.

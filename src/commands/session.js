@@ -44,8 +44,26 @@ const CANDIDATE_STATUS_CHOICES = [
   { name: 'All active', value: 'all_active' },
 ];
 
+function clampAutocompleteText(value, maxLength = 100) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim() || 'Session';
+  const chars = Array.from(text);
+  return chars.length > maxLength ? `${chars.slice(0, maxLength - 1).join('')}…` : text;
+}
+
 function extractMentionedUserIds(content) {
   return [...new Set([...content.matchAll(/<@!?(\d+)>/g)].map(match => match[1]))];
+}
+
+function getRenamedStringOption(interaction, preferredName, legacyNames = [], required = false) {
+  const fallbacks = Array.isArray(legacyNames) ? legacyNames : [legacyNames].filter(Boolean);
+  let value = interaction.options.getString(preferredName);
+  for (const legacyName of fallbacks) {
+    value ??= interaction.options.getString(legacyName);
+  }
+  if (required && !value) {
+    throw new Error(`Missing required option \`${preferredName}\`.`);
+  }
+  return value;
 }
 
 async function resolveMentionedGuildUserIds(interaction, content, {
@@ -89,7 +107,22 @@ function requiresManageGuild(subcommand) {
 }
 
 function requiresPrivateReply(subcommand) {
-  return ['candidates', 'candidate', 'lockin', 'start', 'update', 'end', 'finalize', 'discard', 'schedule', 'upcoming', 'cancel', 'reschedule'].includes(subcommand);
+  return [
+    'candidates',
+    'candidate',
+    'detected_sessions',
+    'detected_session',
+    'lockin',
+    'start',
+    'update',
+    'end',
+    'finalize',
+    'discard',
+    'schedule',
+    'upcoming',
+    'cancel',
+    'reschedule',
+  ].includes(subcommand);
 }
 
 function resolveAutocompleteSubcommand(interaction) {
@@ -151,20 +184,64 @@ function formatCandidateDisplayStamp(value) {
   return `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`;
 }
 
+function formatShortUtcStamp(value) {
+  if (!value) return 'unknown time';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'unknown time';
+  const month = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][date.getUTCMonth()];
+  const day = String(date.getUTCDate()).padStart(2, '0');
+  const hour = String(date.getUTCHours()).padStart(2, '0');
+  const minute = String(date.getUTCMinutes()).padStart(2, '0');
+  return `${month} ${day} ${hour}:${minute} UTC`;
+}
+
+function resolveCachedChannelName(guild, channelId, fallback = 'Unlinked VC') {
+  if (!channelId) return fallback;
+  return guild?.channels?.cache?.get(channelId)?.name || fallback;
+}
+
+async function withAutocompleteTimeout(promise, timeoutMs, timeoutMessage) {
+  let timeoutId;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(timeoutMessage)), timeoutMs);
+  });
+
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function respondAutocompleteChoices(interaction, choices, context = {}) {
+  const safeChoices = choices
+    .map(choice => ({
+      name: clampAutocompleteText(choice.name),
+      value: String(choice.value || '').slice(0, 100),
+    }))
+    .filter(choice => choice.name && choice.value);
+
+  try {
+    return await interaction.respond(safeChoices.slice(0, 25));
+  } catch (error) {
+    logger.error('session_autocomplete_respond_failed', {
+      request_id: interaction.id,
+      guild_id: interaction.guildId,
+      actor_id: interaction.user?.id,
+      choice_count: safeChoices.length,
+      ...context,
+      error,
+    });
+    return interaction.respond([]).catch(() => {});
+  }
+}
+
 function buildCandidateDisplayLabel(candidate) {
-  return `${formatCandidateDisplayStamp(candidate.started_at)} · ${candidate.channel_name_snapshot || 'voice'} · ${candidate.status}`;
+  return `${candidate.channel_name_snapshot || 'Voice Channel'} · ${candidate.game_key || 'session'} · ${formatShortUtcStamp(candidate.started_at)} · ${candidate.status || 'unknown'}`;
 }
 
 function buildCandidateAutocompleteName(candidate) {
-  const parts = [
-    candidate.game_key || 'session',
-    candidate.channel_name_snapshot || 'voice',
-    formatCandidateDisplayStamp(candidate.started_at),
-    candidate.status || 'unknown',
-  ];
-
-  const name = parts.join(' · ');
-  return name.length > 100 ? `${name.slice(0, 99)}…` : name;
+  return clampAutocompleteText(buildCandidateDisplayLabel(candidate));
 }
 
 function buildCandidateSearchText(candidate) {
@@ -195,16 +272,15 @@ function buildScheduleSummaryLine(session) {
   ].join('\n');
 }
 
-function buildScheduleAutocompleteName(session) {
+function buildScheduleAutocompleteName(session, guild = null) {
   const parts = [
+    resolveCachedChannelName(guild, session.linked_channel_id),
     session.game_key || 'session',
-    session.linked_channel_id ? `vc:${session.linked_channel_id}` : 'vc:unlinked',
-    formatCandidateDisplayStamp(session.scheduled_start_at),
+    formatShortUtcStamp(session.scheduled_start_at),
     session.status || 'scheduled',
   ];
 
-  const name = parts.join(' · ');
-  return name.length > 100 ? `${name.slice(0, 99)}…` : name;
+  return clampAutocompleteText(parts.join(' · '));
 }
 
 function buildScheduleSearchText(session) {
@@ -232,14 +308,14 @@ function formatCandidateScheduleContext(candidate, scheduledSession = null) {
   }
 
   if (candidate.schedule_match_status === 'matched') {
-    return `Matched schedule: \`${candidate.scheduled_session_id}\`\nSchedule details are no longer available, but the candidate kept the evidence link.\nContext type: evidence only`;
+    return `Matched schedule: \`${candidate.scheduled_session_id}\`\nSchedule details are no longer available, but the detected session kept the evidence link.\nContext type: evidence only`;
   }
 
   if (candidate.schedule_match_status === 'ambiguous') {
-    return 'Multiple scheduled sessions matched this candidate by time window, so GuildRank did not auto-link one.';
+    return 'Multiple scheduled sessions matched this detected session by time window, so GuildRank did not auto-link one.';
   }
 
-  return 'No single scheduled session matched this candidate automatically.';
+  return 'No single scheduled session matched this detected session automatically.';
 }
 
 function buildCandidateSummaryLine(candidate, scheduledSession = null) {
@@ -252,8 +328,7 @@ function buildCandidateSummaryLine(candidate, scheduledSession = null) {
       : 'Schedule: none';
 
   return [
-    `Candidate: ${buildCandidateDisplayLabel(candidate)}`,
-    `UUID: \`${candidate.id}\``,
+    `Detected session: ${buildCandidateDisplayLabel(candidate)}`,
     `Channel: <#${candidate.channel_id}>`,
     `Game: \`${candidate.game_key}\``,
     `Status: \`${candidate.status}\``,
@@ -278,12 +353,11 @@ function formatLockinSelectionSource(selectionSource) {
 }
 
 function buildLiveSessionDisplayLabel(liveSession) {
-  return `${liveSession.game_key || 'session'} · ${liveSession.channel_name_snapshot || 'voice'} · ${formatCandidateDisplayStamp(liveSession.started_at)} · ${liveSession.status}`;
+  return `${liveSession.channel_name_snapshot || 'Voice Channel'} · ${liveSession.game_key || 'session'} · ${formatShortUtcStamp(liveSession.started_at)} · ${liveSession.status || 'unknown'}`;
 }
 
 function buildLiveSessionAutocompleteName(liveSession) {
-  const name = buildLiveSessionDisplayLabel(liveSession);
-  return name.length > 100 ? `${name.slice(0, 99)}…` : name;
+  return clampAutocompleteText(buildLiveSessionDisplayLabel(liveSession));
 }
 
 function buildLiveSessionSearchText(liveSession) {
@@ -308,7 +382,6 @@ function formatLiveSessionPeople(people, rosterRole) {
 function buildLiveSessionSummaryLine(liveSession, people = []) {
   return [
     `Live Session: ${buildLiveSessionDisplayLabel(liveSession)}`,
-    `UUID: \`${liveSession.id}\``,
     `Channel: <#${liveSession.channel_id}>`,
     `Game: \`${liveSession.game_key}\``,
     `Type: \`${liveSession.session_type}\``,
@@ -319,8 +392,58 @@ function buildLiveSessionSummaryLine(liveSession, people = []) {
     `Winner: ${liveSession.winner_discord_user_id ? `<@${liveSession.winner_discord_user_id}>` : '—'}`,
     `MVP: ${liveSession.mvp_discord_user_id ? `<@${liveSession.mvp_discord_user_id}>` : '—'}`,
     `Source: \`${formatStatus(liveSession.start_context_type)}\``,
-    `Candidate: ${liveSession.source_candidate_id ? `\`${liveSession.source_candidate_id}\`` : '—'}`,
-    `Schedule: ${liveSession.scheduled_session_id ? `\`${liveSession.scheduled_session_id}\`` : '—'}`,
+    `Detected session context: ${liveSession.source_candidate_id ? 'linked' : '—'}`,
+    `Schedule context: ${liveSession.scheduled_session_id ? 'linked' : '—'}`,
+  ].join('\n');
+}
+
+function getLiveSessionStartDuplicateMessage(error) {
+  const message = String(error?.message || '');
+  if (message.includes('already has a live session draft')) {
+    return [
+      '❌ This detected session already has a live session draft.',
+      'Finalize or discard the existing draft before starting another one.',
+    ].join('\n');
+  }
+
+  if (
+    message.includes('already a live session running')
+    || message.includes('already running for this channel')
+    || message.includes('already exists for that source or channel')
+  ) {
+    return [
+      '❌ A live session is already running for this channel.',
+      'End the current live session before starting another one.',
+    ].join('\n');
+  }
+
+  return null;
+}
+
+function getLiveSessionStartFailureMessage(error) {
+  const knownMessage = getLiveSessionStartDuplicateMessage(error);
+  if (knownMessage) return knownMessage;
+
+  const message = String(error?.message || '');
+  const safeStartFailures = [
+    'Choose a closed candidate, a scheduled session, or a tracked voice channel to start a live session.',
+    'When starting from a candidate, do not also pass a schedule or channel.',
+    'Session candidate not found in this server.',
+    'Live sessions can start only from closed candidates in this slice.',
+    'Scheduled session not found in this server.',
+    'Live sessions can only start from scheduled sessions that are still scheduled.',
+    'The selected channel does not match the scheduled session voice channel.',
+    'This scheduled session does not have a linked voice channel. Provide a voice channel to start the live session.',
+    'That voice channel is not currently tracked and enabled for live sessions.',
+  ];
+
+  if (safeStartFailures.includes(message)) {
+    return `❌ Live session was not started.\n${message}`;
+  }
+
+  return [
+    '❌ Live session was not started.',
+    'No live-session draft was created. Try again, then check staging logs if it repeats.',
   ].join('\n');
 }
 
@@ -566,7 +689,7 @@ async function handleCandidatesList(interaction) {
   });
 
   if (!candidates.length) {
-    return interaction.editReply('ℹ️ No matching session candidates found for this server.');
+    return interaction.editReply('ℹ️ No matching detected sessions found for this server.');
   }
 
   const scheduledSessions = await getScheduledSessionsByIds(
@@ -577,21 +700,21 @@ async function handleCandidatesList(interaction) {
 
   const embed = new EmbedBuilder()
     .setColor(BRAND_COLOR)
-    .setTitle('🧭 Session Candidates')
+    .setTitle('🧭 Detected Sessions')
     .setDescription(candidates.map(candidate => (
       buildCandidateSummaryLine(candidate, scheduledSessionMap.get(candidate.scheduled_session_id) || null)
     )).join('\n\n'))
-    .setFooter({ text: `${candidates.length} candidate${candidates.length === 1 ? '' : 's'}` })
+    .setFooter({ text: `${candidates.length} detected session${candidates.length === 1 ? '' : 's'}` })
     .setTimestamp();
 
   return interaction.editReply({ embeds: [embed], allowedMentions: { parse: [] } });
 }
 
 async function handleCandidateDetail(interaction) {
-  const candidateId = interaction.options.getString('candidate_id', true);
+  const candidateId = getRenamedStringOption(interaction, 'detected_session', ['candidate', 'candidate_id'], true);
   const candidate = await getSessionCandidateById(interaction.guildId, candidateId);
   if (!candidate) {
-    return interaction.editReply('❌ Session candidate not found in this server.');
+    return interaction.editReply('❌ Detected session not found in this server.');
   }
 
   const participants = await listCandidateParticipants(candidate.id, interaction.guildId);
@@ -630,7 +753,7 @@ async function handleCandidateDetail(interaction) {
 }
 
 async function handleSessionLockin(interaction) {
-  const candidateId = interaction.options.getString('candidate_id', true);
+  const candidateId = getRenamedStringOption(interaction, 'detected_session', ['candidate', 'candidate_id'], true);
   const candidate = await getSessionCandidateById(interaction.guildId, candidateId);
   const participantMentions = interaction.options.getString('players');
   const participantIds = participantMentions
@@ -650,7 +773,7 @@ async function handleSessionLockin(interaction) {
     .setColor(BRAND_COLOR)
     .setTitle('🧷 Session Lock-In Saved')
     .addFields(
-      { name: 'Candidate', value: candidate ? `${buildCandidateDisplayLabel(candidate)}\n\`${candidateId}\`` : `\`${candidateId}\`` },
+      { name: 'Detected Session', value: candidate ? buildCandidateDisplayLabel(candidate) : 'Selected detected session' },
       { name: 'Draft', value: `\`${result.draft.id}\`` },
       { name: 'Selection Source', value: `\`${formatLockinSelectionSource(result.draft.selection_source)}\``, inline: true },
       { name: 'Players', value: truncate(result.players.map(row => `<@${row.discord_user_id}>`).join(', ') || '—') },
@@ -677,21 +800,36 @@ async function handleSessionLockin(interaction) {
 }
 
 async function handleLiveSessionStart(interaction) {
-  const candidateId = interaction.options.getString('candidate_id');
-  const scheduledSessionId = interaction.options.getString('scheduled_session_id');
+  const candidateId = getRenamedStringOption(interaction, 'detected_session', ['candidate', 'candidate_id']);
+  const scheduledSessionId = getRenamedStringOption(interaction, 'planned_session', ['scheduled_session', 'scheduled_session_id']);
   const channel = interaction.options.getChannel('channel');
-  const result = await startLiveSession({
-    guild: interaction.guild,
-    guildId: interaction.guildId,
-    candidateId: candidateId || null,
-    scheduledSessionId: scheduledSessionId || null,
-    channelId: channel?.id || null,
-    gameKey: interaction.options.getString('game'),
-    sessionType: interaction.options.getString('session_type'),
-    notes: interaction.options.getString('notes'),
-    actorDiscordId: interaction.user.id,
-    requestId: interaction.id,
-  });
+  let result;
+
+  try {
+    result = await startLiveSession({
+      guild: interaction.guild,
+      guildId: interaction.guildId,
+      candidateId: candidateId || null,
+      scheduledSessionId: scheduledSessionId || null,
+      channelId: channel?.id || null,
+      gameKey: interaction.options.getString('game'),
+      sessionType: interaction.options.getString('session_type'),
+      notes: interaction.options.getString('notes'),
+      actorDiscordId: interaction.user.id,
+      requestId: interaction.id,
+    });
+  } catch (error) {
+    logger.error('session_start_failed_before_persistence', {
+      request_id: interaction.id,
+      guild_id: interaction.guildId,
+      actor_id: interaction.user.id,
+      detected_session_id: candidateId || null,
+      planned_session_id: scheduledSessionId || null,
+      channel_id: channel?.id || null,
+      error,
+    });
+    return interaction.editReply(getLiveSessionStartFailureMessage(error));
+  }
 
   const embed = new EmbedBuilder()
     .setColor(BRAND_COLOR)
@@ -712,7 +850,7 @@ async function handleLiveSessionStart(interaction) {
 }
 
 async function handleLiveSessionUpdate(interaction) {
-  const liveSessionId = interaction.options.getString('live_session_id', true);
+  const liveSessionId = getRenamedStringOption(interaction, 'live_session', 'live_session_id', true);
   const playerMentions = interaction.options.getString('players');
   const spectatorMentions = interaction.options.getString('spectators');
   const winnerMention = interaction.options.getString('winner');
@@ -756,7 +894,7 @@ async function handleLiveSessionUpdate(interaction) {
 }
 
 async function handleLiveSessionEnd(interaction) {
-  const liveSessionId = interaction.options.getString('live_session_id', true);
+  const liveSessionId = getRenamedStringOption(interaction, 'live_session', 'live_session_id', true);
   const result = await endLiveSession({
     guildId: interaction.guildId,
     liveSessionId,
@@ -785,13 +923,13 @@ async function handleLiveSessionEnd(interaction) {
 }
 
 async function handleSessionFinalize(interaction) {
-  const candidateId = interaction.options.getString('candidate_id');
-  const liveSessionId = interaction.options.getString('live_session_id');
+  const candidateId = getRenamedStringOption(interaction, 'detected_session', ['candidate', 'candidate_id']);
+  const liveSessionId = getRenamedStringOption(interaction, 'live_session', 'live_session_id');
   if (Boolean(candidateId) === Boolean(liveSessionId)) {
-    return interaction.editReply('❌ Choose exactly one finalize source: either `candidate_id` or `live_session_id`.');
+    return interaction.editReply('❌ Choose exactly one finalize source: either `detected_session` or `live_session`.');
   }
 
-  const scheduledSessionId = interaction.options.getString('scheduled_session_id') || null;
+  const scheduledSessionId = getRenamedStringOption(interaction, 'scheduled_session', 'scheduled_session_id') || null;
   const notesInput = interaction.options.getString('notes');
   const participantMentions = interaction.options.getString('players');
   const winnerMention = interaction.options.getString('winner');
@@ -821,9 +959,9 @@ async function handleSessionFinalize(interaction) {
 
     const embed = new EmbedBuilder()
       .setColor(BRAND_COLOR)
-      .setTitle('✅ Session Candidate Finalized')
+      .setTitle('✅ Detected Session Finalized')
       .addFields(
-        { name: 'Candidate', value: result.candidate ? `${buildCandidateDisplayLabel(result.candidate)}\n\`${candidateId}\`` : `\`${candidateId}\`` },
+        { name: 'Detected Session', value: result.candidate ? buildCandidateDisplayLabel(result.candidate) : 'Selected detected session' },
         { name: 'Official Session', value: `\`${result.officialEvent.id}\`` },
         { name: 'Game', value: result.officialEvent.game_type || '—', inline: true },
         { name: 'Type', value: result.officialEvent.session_type || '—', inline: true },
@@ -867,7 +1005,7 @@ async function handleSessionFinalize(interaction) {
     .setColor(BRAND_COLOR)
     .setTitle('✅ Live Session Finalized')
     .addFields(
-      { name: 'Live Session', value: `${buildLiveSessionDisplayLabel(result.liveSession)}\n\`${result.liveSession.id}\`` },
+      { name: 'Live Session', value: buildLiveSessionDisplayLabel(result.liveSession) },
       { name: 'Official Session', value: `\`${result.officialEvent.id}\`` },
       { name: 'Game', value: result.officialEvent.game_type || '—', inline: true },
       { name: 'Type', value: result.officialEvent.session_type || '—', inline: true },
@@ -887,8 +1025,8 @@ async function handleSessionFinalize(interaction) {
 
   if (result.liveSession.source_candidate_id) {
     embed.addFields({
-      name: 'Consumed Candidate',
-      value: `\`${result.liveSession.source_candidate_id}\``,
+      name: 'Consumed Detected Session',
+      value: 'The linked detected session was marked finalized through this live session.',
     });
   }
 
@@ -950,7 +1088,7 @@ async function handleSessionUpcoming(interaction) {
 }
 
 async function handleSessionCancel(interaction) {
-  const scheduledSessionId = interaction.options.getString('scheduled_session_id', true);
+  const scheduledSessionId = getRenamedStringOption(interaction, 'scheduled_session', 'scheduled_session_id', true);
   const reason = interaction.options.getString('reason');
   const session = await cancelScheduledSession({
     guildId: interaction.guildId,
@@ -975,7 +1113,7 @@ async function handleSessionReschedule(interaction) {
   const host = interaction.options.getUser('host');
   const session = await rescheduleScheduledSession({
     guildId: interaction.guildId,
-    scheduledSessionId: interaction.options.getString('scheduled_session_id', true),
+    scheduledSessionId: getRenamedStringOption(interaction, 'scheduled_session', 'scheduled_session_id', true),
     actorDiscordId: interaction.user.id,
     startTimeInput: interaction.options.getString('start_time', true),
     timezoneLabel: interaction.options.getString('timezone') ?? undefined,
@@ -997,7 +1135,7 @@ async function handleSessionReschedule(interaction) {
 }
 
 async function handleCandidateDiscard(interaction) {
-  const candidateId = interaction.options.getString('candidate_id', true);
+  const candidateId = getRenamedStringOption(interaction, 'detected_session', ['candidate', 'candidate_id'], true);
   const reason = interaction.options.getString('reason', true);
 
   const result = await discardSessionCandidate({
@@ -1010,9 +1148,9 @@ async function handleCandidateDiscard(interaction) {
 
   const embed = new EmbedBuilder()
     .setColor(BRAND_COLOR)
-    .setTitle(result.alreadyDiscarded ? 'ℹ️ Candidate Already Discarded' : '🗑️ Session Candidate Discarded')
+    .setTitle(result.alreadyDiscarded ? 'ℹ️ Detected Session Already Discarded' : '🗑️ Detected Session Discarded')
     .addFields(
-      { name: 'Candidate', value: `\`${candidateId}\`` },
+      { name: 'Detected Session', value: result.candidate ? buildCandidateDisplayLabel(result.candidate) : 'Selected detected session' },
       { name: 'Reason', value: reason },
       { name: 'Status', value: `\`${result.candidate?.status || 'discarded'}\`` },
     )
@@ -1024,7 +1162,7 @@ async function handleCandidateDiscard(interaction) {
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('session')
-    .setDescription('Log a games night session and manage VC-assisted candidates')
+    .setDescription('Log a games night session and manage VC-assisted detected sessions')
     .setDMPermission(false)
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageEvents)
     .addSubcommand(subcommand =>
@@ -1055,19 +1193,19 @@ module.exports = {
     .addSubcommand(subcommand =>
       subcommand
         .setName('start')
-        .setDescription('Start a live draft session from a closed candidate, a schedule, or a tracked voice channel')
+        .setDescription('Start a live draft from detected voice activity, a planned session, or a tracked VC')
         .addStringOption(option =>
           option
-            .setName('candidate_id')
-            .setDescription('Optional closed candidate to preload players and spectators')
+            .setName('detected_session')
+            .setDescription('Start from a session GuildRank already detected from voice activity')
             .setRequired(false)
             .setMaxLength(36)
             .setAutocomplete(true)
         )
         .addStringOption(option =>
           option
-            .setName('scheduled_session_id')
-            .setDescription('Optional scheduled session to start from')
+            .setName('planned_session')
+            .setDescription('Start from a session that was scheduled ahead of time')
             .setRequired(false)
             .setMaxLength(36)
             .setAutocomplete(true)
@@ -1075,22 +1213,22 @@ module.exports = {
         .addChannelOption(option =>
           option
             .setName('channel')
-            .setDescription('Optional voice channel for tracked-VC or schedule start')
+            .setDescription('Start directly from a tracked voice channel')
             .addChannelTypes(ChannelType.GuildVoice)
             .setRequired(false)
         )
-        .addStringOption(option => option.setName('game').setDescription('Optional live game override').setRequired(false).setMaxLength(80))
+        .addStringOption(option => option.setName('game').setDescription('Optional game label for this live session').setRequired(false).setMaxLength(80))
         .addStringOption(option =>
           option
             .setName('session_type')
-            .setDescription('Optional live session type override')
+            .setDescription('Optional session type for this live session')
             .setRequired(false)
             .addChoices(
               { name: 'Competitive', value: 'competitive' },
               { name: 'Casual', value: 'casual' },
             )
         )
-        .addStringOption(option => option.setName('notes').setDescription('Optional live session notes').setRequired(false).setMaxLength(300))
+        .addStringOption(option => option.setName('notes').setDescription('Optional notes for this live session').setRequired(false).setMaxLength(300))
     )
     .addSubcommand(subcommand =>
       subcommand
@@ -1098,7 +1236,7 @@ module.exports = {
         .setDescription('Update the draft players, spectators, result, or notes for a live session')
         .addStringOption(option =>
           option
-            .setName('live_session_id')
+            .setName('live_session')
             .setDescription('Select a recent live or ended session')
             .setRequired(true)
             .setMaxLength(36)
@@ -1116,7 +1254,7 @@ module.exports = {
         .setDescription('Mark a live session as ended without moving official stats yet')
         .addStringOption(option =>
           option
-            .setName('live_session_id')
+            .setName('live_session')
             .setDescription('Select a recent live session')
             .setRequired(true)
             .setMaxLength(36)
@@ -1161,14 +1299,14 @@ module.exports = {
       subcommand
         .setName('cancel')
         .setDescription('Cancel a scheduled session')
-        .addStringOption(option => option.setName('scheduled_session_id').setDescription('Full scheduled session UUID').setRequired(true).setMaxLength(36))
+        .addStringOption(option => option.setName('scheduled_session').setDescription('Scheduled session to cancel').setRequired(true).setMaxLength(36))
         .addStringOption(option => option.setName('reason').setDescription('Optional cancellation reason').setRequired(false).setMaxLength(300))
     )
     .addSubcommand(subcommand =>
       subcommand
         .setName('reschedule')
         .setDescription('Reschedule an existing scheduled session')
-        .addStringOption(option => option.setName('scheduled_session_id').setDescription('Full scheduled session UUID').setRequired(true).setMaxLength(36))
+        .addStringOption(option => option.setName('scheduled_session').setDescription('Scheduled session to reschedule').setRequired(true).setMaxLength(36))
         .addStringOption(option => option.setName('start_time').setDescription('New ISO datetime with UTC or offset').setRequired(true).setMaxLength(40))
         .addStringOption(option => option.setName('timezone').setDescription('Optional updated timezone label').setRequired(false).setMaxLength(80))
         .addStringOption(option => option.setName('game').setDescription('Optional updated game label').setRequired(false).setMaxLength(80))
@@ -1194,26 +1332,26 @@ module.exports = {
     )
     .addSubcommand(subcommand =>
       subcommand
-        .setName('candidates')
-        .setDescription('List private VC-assisted session candidates')
+        .setName('detected_sessions')
+        .setDescription('List detected sessions from private VC activity')
         .addStringOption(option =>
           option
             .setName('status')
-            .setDescription('Candidate status filter')
+            .setDescription('Detected session status filter')
             .setRequired(false)
             .addChoices(...CANDIDATE_STATUS_CHOICES)
         )
         .addChannelOption(option => option.setName('channel').setDescription('Filter to one voice channel').setRequired(false))
-        .addIntegerOption(option => option.setName('limit').setDescription('Number of candidates to return').setRequired(false).setMinValue(1).setMaxValue(25))
+        .addIntegerOption(option => option.setName('limit').setDescription('Number of detected sessions to return').setRequired(false).setMinValue(1).setMaxValue(25))
     )
     .addSubcommand(subcommand =>
       subcommand
-        .setName('candidate')
-        .setDescription('Inspect one private VC-assisted session candidate')
+        .setName('detected_session')
+        .setDescription('Inspect one detected session from private VC activity')
         .addStringOption(option =>
           option
-            .setName('candidate_id')
-            .setDescription('Select a recent candidate')
+            .setName('detected_session')
+            .setDescription('Select a recent detected session')
             .setRequired(true)
             .setMaxLength(36)
             .setAutocomplete(true)
@@ -1222,11 +1360,11 @@ module.exports = {
     .addSubcommand(subcommand =>
       subcommand
         .setName('lockin')
-        .setDescription('Create or replace a draft locked roster for a closed VC-assisted candidate')
+        .setDescription('Create or replace a draft player roster for a closed detected session')
         .addStringOption(option =>
           option
-            .setName('candidate_id')
-            .setDescription('Select a recent closed candidate')
+            .setName('detected_session')
+            .setDescription('Select a recent closed detected session')
             .setRequired(true)
             .setMaxLength(36)
             .setAutocomplete(true)
@@ -1237,18 +1375,18 @@ module.exports = {
     .addSubcommand(subcommand =>
       subcommand
         .setName('finalize')
-        .setDescription('Finalize a closed candidate or ended live session into an official session')
+        .setDescription('Finalize a closed detected session or ended live session into an official session')
         .addStringOption(option =>
           option
-            .setName('candidate_id')
-            .setDescription('Select a recent closed candidate')
+            .setName('detected_session')
+            .setDescription('Select a recent closed detected session')
             .setRequired(false)
             .setMaxLength(36)
             .setAutocomplete(true)
         )
         .addStringOption(option =>
           option
-            .setName('live_session_id')
+            .setName('live_session')
             .setDescription('Select a recent ended live session')
             .setRequired(false)
             .setMaxLength(36)
@@ -1256,7 +1394,7 @@ module.exports = {
         )
         .addStringOption(option =>
           option
-            .setName('scheduled_session_id')
+            .setName('scheduled_session')
             .setDescription('Optional scheduled session to link during finalize')
             .setRequired(false)
             .setMaxLength(36)
@@ -1270,16 +1408,16 @@ module.exports = {
     .addSubcommand(subcommand =>
       subcommand
         .setName('discard')
-        .setDescription('Discard a VC-assisted session candidate')
+        .setDescription('Discard a detected session from VC activity')
         .addStringOption(option =>
           option
-            .setName('candidate_id')
-            .setDescription('Select a recent candidate')
+            .setName('detected_session')
+            .setDescription('Select a recent detected session')
             .setRequired(true)
             .setMaxLength(36)
             .setAutocomplete(true)
         )
-        .addStringOption(option => option.setName('reason').setDescription('Why this candidate should be discarded').setRequired(true).setMaxLength(300))
+        .addStringOption(option => option.setName('reason').setDescription('Why this detected session should be discarded').setRequired(true).setMaxLength(300))
     ),
 
   async autocomplete(interaction) {
@@ -1287,7 +1425,10 @@ module.exports = {
     const focused = interaction.options.getFocused(true);
 
     if (!interaction.guildId) {
-      return interaction.respond([]);
+      return respondAutocompleteChoices(interaction, [], {
+        subcommand,
+        focused_option: focused.name,
+      });
     }
 
     const requiredPermission = requiresManageGuild(subcommand)
@@ -1303,13 +1444,18 @@ module.exports = {
         has_member_permissions: Boolean(interaction.memberPermissions),
         has_member_permissions_fallback: Boolean(interaction.member?.permissions),
       });
-      return interaction.respond([]);
+      return respondAutocompleteChoices(interaction, [], {
+        subcommand,
+        focused_option: focused.name,
+        reason: 'permission_unresolved',
+      });
     }
 
     const search = String(focused.value || '').trim().toLowerCase();
 
-    if (focused.name === 'candidate_id') {
+    if (focused.name === 'detected_session' || focused.name === 'candidate' || focused.name === 'candidate_id') {
       const statusMap = {
+        detected_session: ['open', 'closed', 'finalized', 'discarded'],
         candidate: ['open', 'closed', 'finalized', 'discarded'],
         lockin: ['closed'],
         start: ['closed'],
@@ -1326,13 +1472,40 @@ module.exports = {
           subcommand,
           focused_option: focused.name,
         });
-        return interaction.respond([]);
+        return respondAutocompleteChoices(interaction, [], {
+          subcommand,
+          focused_option: focused.name,
+          reason: 'unmapped_candidate_subcommand',
+        });
       }
 
-      const recentCandidates = await listSessionCandidates(interaction.guildId, {
-        statuses,
-        limit: search ? 100 : 25,
-      });
+      let recentCandidates = [];
+      try {
+        recentCandidates = await withAutocompleteTimeout(
+          listSessionCandidates(interaction.guildId, {
+            statuses,
+            limit: search ? 100 : 25,
+          }),
+          2200,
+          'candidate_autocomplete_query_timeout'
+        );
+      } catch (error) {
+        logger.error('session_candidate_autocomplete_query_failed', {
+          request_id: interaction.id,
+          guild_id: interaction.guildId,
+          actor_id: interaction.user?.id,
+          subcommand,
+          focused_option: focused.name,
+          status_filter: statuses,
+          search_present: Boolean(search),
+          error,
+        });
+        return respondAutocompleteChoices(interaction, [], {
+          subcommand,
+          focused_option: focused.name,
+          reason: 'candidate_query_failed',
+        });
+      }
 
       const filteredCandidates = search
         ? recentCandidates.filter(candidate => buildCandidateSearchText(candidate).includes(search))
@@ -1352,15 +1525,21 @@ module.exports = {
         });
       }
 
-      return interaction.respond(
+      return respondAutocompleteChoices(
+        interaction,
         filteredCandidates.slice(0, 25).map(candidate => ({
           name: buildCandidateAutocompleteName(candidate),
           value: candidate.id,
-        }))
+        })),
+        {
+          subcommand,
+          focused_option: focused.name,
+          status_filter: statuses,
+        }
       );
     }
 
-    if (focused.name === 'live_session_id') {
+    if (focused.name === 'live_session' || focused.name === 'live_session_id') {
       const statusMap = {
         update: ['live', 'ended'],
         end: ['live'],
@@ -1369,7 +1548,11 @@ module.exports = {
 
       const statuses = statusMap[subcommand];
       if (!statuses) {
-        return interaction.respond([]);
+        return respondAutocompleteChoices(interaction, [], {
+          subcommand,
+          focused_option: focused.name,
+          reason: 'unmapped_live_session_subcommand',
+        });
       }
 
       const liveSessions = await listLiveSessions(interaction.guildId, {
@@ -1381,29 +1564,43 @@ module.exports = {
         ? liveSessions.filter(session => buildLiveSessionSearchText(session).includes(search))
         : liveSessions;
 
-      return interaction.respond(
+      return respondAutocompleteChoices(
+        interaction,
         filteredLiveSessions.slice(0, 25).map(liveSession => ({
           name: buildLiveSessionAutocompleteName(liveSession),
           value: liveSession.id,
-        }))
+        })),
+        {
+          subcommand,
+          focused_option: focused.name,
+        }
       );
     }
 
-    if (focused.name === 'scheduled_session_id') {
+    if (focused.name === 'planned_session' || focused.name === 'scheduled_session' || focused.name === 'scheduled_session_id') {
       const scheduledSessions = await listUpcomingScheduledSessions(interaction.guildId, { limit: 20 });
       const filteredSessions = search
         ? scheduledSessions.filter(session => buildScheduleSearchText(session).includes(search))
         : scheduledSessions;
 
-      return interaction.respond(
+      return respondAutocompleteChoices(
+        interaction,
         filteredSessions.slice(0, 25).map(session => ({
-          name: buildScheduleAutocompleteName(session),
+          name: buildScheduleAutocompleteName(session, interaction.guild),
           value: session.id,
-        }))
+        })),
+        {
+          subcommand,
+          focused_option: focused.name,
+        }
       );
     }
 
-    return interaction.respond([]);
+    return respondAutocompleteChoices(interaction, [], {
+      subcommand,
+      focused_option: focused.name,
+      reason: 'unsupported_focused_option',
+    });
   },
 
   async execute(interaction) {
@@ -1465,8 +1662,8 @@ module.exports = {
       if (subcommand === 'upcoming') return handleSessionUpcoming(interaction);
       if (subcommand === 'cancel') return handleSessionCancel(interaction);
       if (subcommand === 'reschedule') return handleSessionReschedule(interaction);
-      if (subcommand === 'candidates') return handleCandidatesList(interaction);
-      if (subcommand === 'candidate') return handleCandidateDetail(interaction);
+      if (subcommand === 'detected_sessions' || subcommand === 'candidates') return handleCandidatesList(interaction);
+      if (subcommand === 'detected_session' || subcommand === 'candidate') return handleCandidateDetail(interaction);
       if (subcommand === 'lockin') return handleSessionLockin(interaction);
       if (subcommand === 'start') return handleLiveSessionStart(interaction);
       if (subcommand === 'update') return handleLiveSessionUpdate(interaction);

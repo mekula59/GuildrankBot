@@ -25,11 +25,13 @@ module.exports = {
     ),
 
   async execute(interaction) {
+    await interaction.deferReply();
+
     if (!(await isSetup(interaction.guildId))) {
-      return interaction.reply({ content: '⚙️ Run `/setup` first to activate GuildRank!', ephemeral: true });
+      await interaction.deleteReply().catch(() => {});
+      return interaction.followUp({ content: '⚙️ Run `/setup` first to activate GuildRank!', ephemeral: true });
     }
 
-    await interaction.deferReply();
     const type   = interaction.options.getString('type') || 'sessions';
     const metric = METRICS[type];
     const rows   = await getLeaderboard(interaction.guildId, metric.col, 10);

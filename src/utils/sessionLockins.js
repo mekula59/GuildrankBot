@@ -183,6 +183,7 @@ async function upsertSessionLockinDraft({
   const { error: deleteError } = await supabase
     .from('session_lockin_draft_players')
     .delete()
+    .eq('guild_id', guildId)
     .eq('session_lockin_draft_id', draft.id);
 
   if (deleteError) throw deleteError;

@@ -479,6 +479,7 @@ async function finalizeVcSession({
       recovered,
     })
     .eq('id', sessionId)
+    .eq('guild_id', guildId)
     .is('left_at', null)
     .select('id')
     .maybeSingle();

@@ -79,14 +79,18 @@ async function getSessionCandidateById(guildId, candidateId) {
   return data || null;
 }
 
-async function updateCandidateParticipantSnapshot(candidateId, fields = {}) {
-  const { data, error } = await supabase
+async function updateCandidateParticipantSnapshot(candidateId, fields = {}, guildId = null) {
+  let query = supabase
     .from('session_candidates')
     .update({
       ...fields,
       updated_at: new Date().toISOString(),
     })
-    .eq('id', candidateId)
+    .eq('id', candidateId);
+
+  if (guildId) query = query.eq('guild_id', guildId);
+
+  const { data, error } = await query
     .select()
     .single();
 
@@ -106,7 +110,7 @@ async function listSessionCandidates(guildId, {
     .select('*')
     .eq('guild_id', guildId)
     .order('started_at', { ascending: false })
-    .limit(Math.min(Math.max(limit, 1), 25));
+    .limit(Math.min(Math.max(limit, 1), 100));
 
   if (Array.isArray(statuses) && statuses.length) {
     query = query.in('status', statuses);
@@ -295,6 +299,7 @@ async function touchOpenCandidate(candidate, detectedMemberCount) {
       updated_at: new Date().toISOString(),
     })
     .eq('id', candidate.id)
+    .eq('guild_id', candidate.guild_id)
     .select()
     .single();
 
@@ -317,6 +322,7 @@ async function refreshCandidateParticipants(candidate, trackedVoiceChannel) {
   const { error: deleteError } = await supabase
     .from('candidate_participants')
     .delete()
+    .eq('guild_id', candidate.guild_id)
     .eq('session_candidate_id', candidate.id);
 
   if (deleteError) throw deleteError;
@@ -333,7 +339,7 @@ async function refreshCandidateParticipants(candidate, trackedVoiceChannel) {
     participant_snapshot_status: 'ready',
     participant_snapshot_refreshed_at: new Date().toISOString(),
     participant_snapshot_error: null,
-  });
+  }, candidate.guild_id);
 
   return rows;
 }
@@ -360,6 +366,7 @@ async function closeSessionCandidate(candidate, trackedVoiceChannel, endedAt) {
       updated_at: new Date().toISOString(),
     })
     .eq('id', candidate.id)
+    .eq('guild_id', candidate.guild_id)
     .eq('status', 'open')
     .select()
     .single();
@@ -373,7 +380,7 @@ async function closeSessionCandidate(candidate, trackedVoiceChannel, endedAt) {
     await updateCandidateParticipantSnapshot(data.id, {
       participant_snapshot_status: 'failed',
       participant_snapshot_error: error.message || 'participant_refresh_failed',
-    });
+    }, data.guild_id);
 
     logger.error('session_candidate_participant_refresh_failed', {
       guild_id: data.guild_id,
@@ -443,7 +450,7 @@ async function ensureCandidateParticipantSnapshotReady(candidate) {
     await updateCandidateParticipantSnapshot(candidate.id, {
       participant_snapshot_status: 'pending',
       participant_snapshot_error: null,
-    });
+    }, candidate.guild_id);
 
     await refreshCandidateParticipants(candidate, trackedVoiceChannel);
     return getSessionCandidateById(candidate.guild_id, candidate.id);
@@ -451,7 +458,7 @@ async function ensureCandidateParticipantSnapshotReady(candidate) {
     await updateCandidateParticipantSnapshot(candidate.id, {
       participant_snapshot_status: 'failed',
       participant_snapshot_error: error.message || 'participant_recompute_failed',
-    });
+    }, candidate.guild_id);
     throw new Error('Candidate participant rows are missing or stale and recompute failed. Resolve candidate integrity before finalizing.');
   }
 }

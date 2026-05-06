@@ -1,112 +1,155 @@
 # GuildRank Changelog
 
-This changelog is a practical implementation summary of what exists in the repo now.
+This changelog is a practical record of what the current GuildRank repo implements. It is written as a product and operations log, not a raw commit dump.
 
-## Current snapshot
+## Current product shape
 
-GuildRank now supports:
+GuildRank currently supports:
 
-- passive VC attendance and credited VC minutes
+- tracked voice channel defaults
+- VC activity ingestion
+- detected sessions from voice activity
+- observed participant aggregation
 - manual session logging
-- tracked VC defaults
-- VC-assisted candidate detection
-- candidate participant aggregation
-- admin finalize and discard
-- scheduled sessions
-- schedule-aware candidate context
-- admin lock-in drafts
-- repair queue and startup guardrails
+- planned sessions
+- lock-in drafts
+- live sessions
+- finalize and discard flows
+- audit and repair guardrails
 
-## Implementation slices
+## Implementation timeline
 
-## Foundation
+### 1. Base product foundation
 
-Initial GuildRank foundations established:
+The first layer established GuildRank as a multi-guild Discord product with the basic data and command surface needed for attendance and stats.
 
-- multi-guild Discord bot structure
-- source tables for players, stats, events, and attendance
+Key outcomes:
+
+- core player, event, attendance, and stat tables
+- manual session logging
 - passive VC attendance tracking
-- leaderboard, stats, and digest features
+- leaderboard and digest foundations
 
-## Guardrails and corrections
+### 2. Operational guardrails and correction paths
 
-Operational hardening added:
+The next layer focused on making operator actions safer and easier to recover.
+
+Key outcomes:
 
 - versioned SQL migrations
-- startup migration verification
-- job locks for recurring jobs
-- digest dedupe history
+- startup migration checks
 - audit logging for operator actions
-- correction workflow for manual sessions
+- manual correction workflow
 - queued stat repairs when rebuilds fail
 - mutation throttles
+- recurring job locks
 
-## VC-assisted Phase 1 foundation
+### 3. VC-assisted capture foundation
 
-VC-assisted capture introduced:
+This slice added the first real evidence-based session flow.
+
+Key outcomes:
 
 - tracked voice channel configuration
-- voice presence segment ingestion
-- session candidate detection
-- candidate participant aggregation
-- candidate discard and finalize flow
+- VC presence segment ingestion
+- detected-session creation
+- detected-session closing logic
+- observed participant aggregation
+- finalize and discard from detected sessions
 
-## Candidate integrity improvements
+### 4. Detected-session integrity hardening
 
-Further Phase 1 hardening added:
+After the first VC-assisted flow existed, the next work focused on making it safer to trust.
 
-- candidate threshold snapshots
-- participant recompute from candidate snapshots
-- startup recovery warm-up delay
-- cleaner `/vc track` and `/vc config` UX
+Key outcomes:
 
-## Scheduled sessions slice 1
+- threshold snapshot fields stored on detected sessions
+- participant recompute tied to detected-session snapshots, not mutable channel config
+- restart and redeploy recovery warm-up delay
+- cleaner tracked-channel setup UX
 
-Scheduling support added:
+### 5. Planned sessions
 
-- `scheduled_sessions` table
+This slice introduced the planning layer.
+
+Key outcomes:
+
+- `scheduled_sessions` schema
 - `/session schedule`
 - `/session upcoming`
 - `/session cancel`
 - `/session reschedule`
-- optional manual scheduled-session linkage during finalize
+- optional planned-session linkage during finalize
 
-## Schedule-aware candidate context
+### 6. Planned-session context on detected sessions
 
-Candidate context now includes schedule evidence:
+The next step connected planning with VC evidence without turning plans into automatic truth.
 
-- candidate optional `scheduled_session_id`
-- candidate `schedule_match_status`
-- conservative time-window matcher
+Key outcomes:
+
+- optional planned-session linkage on detected sessions
+- conservative planned-session matcher
 - ambiguity-safe behavior
-- schedule context visible in candidate queries
+- planned-session context visible during detected-session review
 
-Current rule:
+Important rule:
 
-- schedule matches remain evidence only unless an operator links a schedule during finalize
+planned-session matches remain evidence only unless an operator finalizes an official result.
 
-## Admin lock-in draft layer
+### 7. Lock-in drafts
 
-Lock-in draft support added:
+This slice added the draft-truth layer between evidence and official results.
 
-- `session_lockin_drafts`
-- `session_lockin_draft_players`
+Key outcomes:
+
+- lock-in draft tables
 - backend lock-in service
 - `/session lockin`
-- locked roster display in candidate detail
-- finalize defaulting to locked roster when no explicit finalize roster is passed
+- locked roster shown during detected-session review
+- finalize defaulting to the saved lock-in roster when no explicit roster is passed
 
-Current rule:
+Important rule:
 
-- lock-in is draft only and does not affect stats until finalize
+lock-in is draft truth. It does not move stats by itself.
 
-## Current known gaps
+### 8. Live sessions
 
-Still not implemented:
+This slice added the operational draft layer used while a game is happening.
 
-- player self-check-in
-- public player-facing lock-in flow
-- automatic finalize
-- `/session live`
-- schedule-driven automatic override of candidate game and type
-- broad-production hardening for all reconnect and multi-instance edge cases
+Key outcomes:
+
+- `live_sessions`
+- `live_session_people`
+- player and spectator separation
+- `/session start`
+- `/session update`
+- `/session end`
+- `/session finalize` support for ended live sessions
+- event source support for live-session finalization
+
+Important rule:
+
+live sessions are draft operational state. Only finalization creates the official event.
+
+### 9. Operator UX cleanup
+
+After the core live-session path existed, the focus shifted to operator usability.
+
+Key outcomes:
+
+- human-readable detected-session labels in autocomplete and command output
+- mention-driven player, winner, and MVP input
+- clearer `/session start` source labels
+- operator-facing rename from internal candidate language to detected-session language
+- clearer duplicate-start failures for live-session starts
+
+## Current known limits
+
+These areas are still intentionally unfinished:
+
+- no player self-check-in
+- no public lock-in flow
+- no automatic finalize
+- no live-session auto-sync after start
+- no automatic official credit from planned sessions alone
+- no broad-production hardening for every reconnect and multi-instance edge case

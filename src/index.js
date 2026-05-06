@@ -69,7 +69,7 @@ function scheduleJobs() {
     }
   });
 
-  cron.schedule('0 20 * * *', async () => {
+  cron.schedule('* * * * *', async () => {
     try {
       await withJobLock(
         { jobType: 'weekly_digest', scopeKey: environmentScope, leaseSeconds: 3600, context: { trigger: 'cron' } },

@@ -1,4 +1,8 @@
 const supabase = require('./supabase');
+const {
+  DEFAULT_RUNTIME_CONFIG,
+  normalizeGuildRuntimeConfig,
+} = require('./guildRuntimeConfig');
 
 // In-memory cache so we're not hitting DB on every event
 const cache = new Map();
@@ -17,6 +21,11 @@ async function getGuildConfig(guildId) {
 
   if (data) cache.set(guildId, data);
   return data || null;
+}
+
+async function getGuildRuntimeConfig(guildId) {
+  const config = await getGuildConfig(guildId);
+  return normalizeGuildRuntimeConfig(config);
 }
 
 /**
@@ -59,4 +68,13 @@ function invalidateGuildConfig(guildId) {
   cache.delete(guildId);
 }
 
-module.exports = { getGuildConfig, saveGuildConfig, isSetup, getAllGuilds, invalidateGuildConfig };
+module.exports = {
+  DEFAULT_RUNTIME_CONFIG,
+  getGuildConfig,
+  getGuildRuntimeConfig,
+  saveGuildConfig,
+  isSetup,
+  getAllGuilds,
+  invalidateGuildConfig,
+  normalizeGuildRuntimeConfig,
+};

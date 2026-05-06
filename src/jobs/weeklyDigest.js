@@ -11,11 +11,15 @@ const logger = require('../utils/logger');
 const { getDigestKey } = require('../utils/digestKey');
 const { getRuntimeEnvironment } = require('../utils/env');
 const { getAllGuilds }  = require('../utils/guilds');
+const { normalizeGuildRuntimeConfig } = require('../utils/guildRuntimeConfig');
+const {
+  DEFAULT_DIGEST_TIME_UTC,
+  getConfiguredDayName,
+  getUtcTimeString,
+  shouldSendDigestForConfig,
+} = require('../utils/weeklyDigestSchedule');
 const { getLeaderboard } = require('../utils/stats');
 const { BRAND_COLOR }   = require('../../config/constants');
-
-// getDay() returns 0=Sun, 1=Mon ... 5=Fri, 6=Sat
-const DAY_MAP = { 0: 'sunday', 1: 'monday', 5: 'friday', 6: 'saturday' };
 
 async function getDigestHistory(guildId, digestKey) {
   const { data, error } = await supabase
@@ -46,6 +50,7 @@ async function reserveDigestRun({ guildId, digestKey, channelId, jobScopeKey }) 
         updated_at: new Date().toISOString(),
       })
       .eq('id', existing.id)
+      .eq('guild_id', guildId)
       .select()
       .single();
 
@@ -70,8 +75,8 @@ async function reserveDigestRun({ guildId, digestKey, channelId, jobScopeKey }) 
   return { skipped: false, row: data };
 }
 
-async function completeDigestRun(id, messageId) {
-  const { error } = await supabase
+async function completeDigestRun(guildId, id, messageId) {
+  let query = supabase
     .from('weekly_digest_history')
     .update({
       status: 'sent',
@@ -82,11 +87,15 @@ async function completeDigestRun(id, messageId) {
     })
     .eq('id', id);
 
+  if (guildId) query = query.eq('guild_id', guildId);
+
+  const { error } = await query;
+
   if (error) throw error;
 }
 
-async function failDigestRun(id, errorMessage) {
-  const { error } = await supabase
+async function failDigestRun(guildId, id, errorMessage) {
+  let query = supabase
     .from('weekly_digest_history')
     .update({
       status: 'failed',
@@ -95,21 +104,25 @@ async function failDigestRun(id, errorMessage) {
     })
     .eq('id', id);
 
+  if (guildId) query = query.eq('guild_id', guildId);
+
+  const { error } = await query;
+
   if (error) throw error;
 }
 
-async function sendWeeklyDigest(client) {
-  const todayName = DAY_MAP[new Date().getDay()]; // reliable on all servers
-  if (!todayName) return; // not a digest day (Tue/Wed/Thu)
-  const digestKey = getDigestKey();
+async function sendWeeklyDigest(client, { now = new Date() } = {}) {
+  const digestKey = getDigestKey(now);
 
   const guilds   = await getAllGuilds();
-  const matching = guilds.filter(g => g.digest_day === todayName);
+  const matching = guilds
+    .map(normalizeGuildRuntimeConfig)
+    .filter(config => shouldSendDigestForConfig(config, now));
 
   logger.info('weekly_digest_started', {
     digest_key: digestKey,
     matching_guilds: matching.length,
-    digest_day: todayName,
+    utc_time: getUtcTimeString(now),
   });
 
   for (const config of matching) {
@@ -120,14 +133,15 @@ async function sendWeeklyDigest(client) {
       const rows = await getLeaderboard(config.guild_id, 'total_events', 5);
       if (!rows.length) continue;
 
-      const channel = guild.channels.cache.get(config.announce_channel_id);
+      const digestChannelId = config.digest_channel_id || config.announce_channel_id;
+      const channel = guild.channels.cache.get(digestChannelId);
       if (!channel) continue;
       if (!channel.isTextBased?.()) continue;
 
       const reservation = await reserveDigestRun({
         guildId: config.guild_id,
         digestKey,
-        channelId: config.announce_channel_id,
+        channelId: digestChannelId,
         jobScopeKey: `weekly_digest:${getRuntimeEnvironment()}:${digestKey}`,
       });
 
@@ -161,12 +175,12 @@ async function sendWeeklyDigest(client) {
         ],
       });
 
-      await completeDigestRun(reservation.row.id, message.id);
+      await completeDigestRun(config.guild_id, reservation.row.id, message.id);
       logger.info('weekly_digest_sent', {
         guild_id: config.guild_id,
         guild_name: guild.name,
         digest_key: digestKey,
-        channel_id: config.announce_channel_id,
+        channel_id: digestChannelId,
         message_id: message.id,
       });
     } catch (e) {
@@ -178,10 +192,17 @@ async function sendWeeklyDigest(client) {
 
       const existing = await getDigestHistory(config.guild_id, digestKey).catch(() => null);
       if (existing?.id) {
-        await failDigestRun(existing.id, e.message || 'unknown_error').catch(() => {});
+        await failDigestRun(config.guild_id, existing.id, e.message || 'unknown_error').catch(() => {});
       }
     }
   }
 }
 
-module.exports = { sendWeeklyDigest, getDigestKey };
+module.exports = {
+  getConfiguredDayName,
+  getDigestKey,
+  getUtcTimeString,
+  sendWeeklyDigest,
+  shouldSendDigestForConfig,
+  DEFAULT_DIGEST_TIME_UTC,
+};

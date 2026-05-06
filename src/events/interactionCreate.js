@@ -3,6 +3,25 @@ const logger = require('../utils/logger');
 module.exports = {
   name: 'interactionCreate',
   async execute(interaction, client) {
+    if (interaction.isAutocomplete()) {
+      const cmd = client.commands.get(interaction.commandName);
+      if (!cmd?.autocomplete) return;
+
+      try {
+        await cmd.autocomplete(interaction);
+      } catch (e) {
+        logger.error('command_autocomplete_failed', {
+          request_id: interaction.id,
+          guild_id: interaction.guildId,
+          actor_id: interaction.user?.id,
+          command: interaction.commandName,
+          error: e,
+        });
+        await interaction.respond([]).catch(() => {});
+      }
+      return;
+    }
+
     if (!interaction.isChatInputCommand()) return;
     const cmd = client.commands.get(interaction.commandName);
     if (!cmd) return;

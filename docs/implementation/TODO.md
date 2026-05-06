@@ -1,43 +1,46 @@
 # GuildRank TODO
 
-This file lists practical next steps based on the current implementation.
+This file tracks the most important remaining work in grouped product and rollout buckets.
 
-## Before broader production
+## Release blockers before broader production
 
-- Harden startup recovery so live sessions and candidates are less dependent on cold Discord caches after reconnect or redeploy.
-- Replace or supplement in-memory command throttling with a cross-instance-safe throttle path.
-- Add more DB-backed integration coverage for candidate close, lock-in, finalize, discard, schedule linkage, and repair queue behavior.
-- Expand staging verification around restart timing, repair recovery, and multi-instance behavior.
+- Reduce remaining recovery dependence on cold Discord cache state after reconnect or redeploy.
+- Replace or supplement in-memory mutation throttling with a cross-instance-safe approach.
+- Add stronger integration coverage for finalize, discard, live-session transitions, repair recovery, and restart behavior.
+- Expand multi-instance safety checks around jobs, command handling, and recovery timing.
 
-## Next product slices
+## Next staging tasks
 
-- Add `/session live` so operators can inspect live session state without waiting for close and finalize.
+- Re-run staging flows that cover planned session, detected session, live session, ended session, and finalized result as one continuous operator journey.
+- Re-test duplicate live-session start failures for both channel conflict and detected-session linkage conflict.
+- Re-test restart and redeploy behavior while detected sessions and live sessions already exist.
+- Verify operator messaging stays clear for finalize, discard, duplicate starts, and schedule linkage edge cases.
+
+## Product improvements
+
+- Add a dedicated read-only view for current live sessions so operators can inspect draft state without updating it.
 - Add a safe player-facing confirmation layer without letting self-reporting become official truth automatically.
-- Improve schedule-aware operator workflows without turning schedule matches into automatic official truth.
+- Improve planned-session review during finalize without turning schedule context into automatic truth.
+- Improve operator visibility into which roster source was used during finalization.
+- Add clearer history views for discarded detected sessions, lock-in changes, and live-session updates.
 
-## Current workflow improvements
+## Documentation and training
 
-- Improve operator visibility around which finalize roster source was used across more admin views.
-- Add better audit-friendly views for schedule context, lock-in history, and discarded candidates.
-- Consider a clearer operator command for unlinking or replacing schedule context during finalize-time review.
+- Keep operator docs aligned with every slash-command rename or workflow change.
+- Add a compact staging checklist that mirrors the real game-night flow from planned session through finalized official event.
+- Keep examples grounded in reusable community patterns such as shared lobbies, mixed gaming channels, and rotating game nights.
 
-## Reuse and multi-community support
+## Rollout decisions
 
-- Keep documenting reusable game label guidance for mixed communities.
-- Expand guidance for communities that rotate multiple games through one shared VC.
-- Decide whether future multi-channel session support is necessary for faction or team comms.
+- Decide what minimum monitoring must be in place before a broader production rollout.
+- Decide whether a future reopen or clone flow for ended live sessions is desirable, or whether one detected session should always map to one live draft.
+- Decide how much operator training is needed before non-technical staff use live-session workflows at scale.
 
 ## Explicitly not implemented yet
 
-- public player self-check-in
+- player self-check-in
 - public lock-in workflow
 - automatic finalize
 - automatic official credit from VC occupancy alone
-- automatic official credit from schedules alone
+- automatic official credit from planned sessions alone
 - stage-channel tracking as a normal `/vc track` path
-
-## Ongoing documentation work
-
-- Keep the operator guide aligned with the slash-command surface after every session-system change.
-- Keep the staging test plan aligned with new migration slices and recovery behavior.
-- Update this TODO whenever a roadmap item becomes implemented or is intentionally dropped.

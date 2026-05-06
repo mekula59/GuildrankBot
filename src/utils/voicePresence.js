@@ -40,6 +40,7 @@ async function closeVoicePresenceSegment({ guildId, discordUserId, leftAt = new 
       updated_at: new Date().toISOString(),
     })
     .eq('id', openSegment.id)
+    .eq('guild_id', guildId)
     .select()
     .single();
 

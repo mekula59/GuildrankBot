@@ -1,239 +1,206 @@
 # VC-Assisted Capture
 
-## Goal
+VC-assisted capture is the part of GuildRank that turns voice activity into something an operator can review and eventually finalize.
 
-VC-assisted capture helps operators turn messy real-world voice activity into trustworthy official session records without assuming that everyone in VC was an actual player.
+Its job is not to guess final truth perfectly.
 
-The current model is:
+Its job is to gather useful evidence, shape it into detected sessions, and give operators a safe review path before stats move.
 
-- tracked VC defaults give fallback context
-- observed VC activity creates candidates
-- candidate participants represent observed people
-- admin lock-in drafts represent intended actual players
-- finalize creates official participants
+## The core rule
 
-## Why observed people are not auto-counted
+Voice activity is evidence, not official truth.
 
-A VC can contain:
+That rule exists because real voice channels are messy.
+
+A voice channel may contain:
 
 - active players
 - spectators
-- hosts or moderators
-- substitutes
+- hosts
+- moderators
 - late joiners
-- people just listening
+- people who are only listening
 
-Because of that, GuildRank does not treat candidate participants as official players automatically.
+If GuildRank treated everyone in voice as an official player automatically, the records would drift away from reality very quickly.
 
-## Current lifecycle
+## What VC-assisted capture actually does
 
-### 1. Track a VC
+VC-assisted capture moves through these steps:
 
-Operators save a default profile with `/vc track`:
+1. Track the right voice channels.
+2. Watch who joins and leaves.
+3. Open a detected session when activity looks real enough.
+4. Close the detected session when activity drops off.
+5. Aggregate the observed people.
+6. Optionally match the detected session to a planned session.
+7. Let an operator review, lock in, run a live session, finalize, or discard.
+
+## Step 1: tracked voice channels
+
+Operators decide which voice channels GuildRank should watch.
+
+`/vc track` stores the default session profile for a channel:
 
 - `channel`
 - `game`
 - `session_type`
 
-Advanced thresholds can be tuned later with `/vc config`.
+These are defaults, not hard rules.
 
-### 2. Ingest presence evidence
+Advanced threshold tuning lives behind `/vc config`.
 
-GuildRank records voice presence segments for members in tracked channels.
+## Step 2: watch voice activity
 
-Candidate opening uses:
+GuildRank ingests voice presence as members join and leave tracked channels.
 
-- minimum active human members
-- minimum candidate duration
+This gives the system a timeline of who was present and for how long.
 
-Candidate closing uses:
+At this stage, GuildRank still knows nothing about who actually played.
 
-- grace gap seconds below threshold
+## Step 3: open a detected session
 
-### 3. Open a candidate
+When enough human members stay active for long enough, GuildRank opens a detected session.
 
-When the configured threshold holds long enough, GuildRank opens a `session_candidate`.
-
-At candidate creation time it snapshots:
+At creation time it snapshots the settings that mattered for that detection:
 
 - default game
 - default session type
-- minimum active members
-- minimum candidate duration
-- minimum participant presence minutes
-- grace gap seconds
-
-Those snapshots protect the candidate from later config drift.
-
-### 4. Close and aggregate participants
-
-When activity falls below threshold long enough, the candidate closes.
-
-GuildRank then computes `candidate_participants` using:
-
-- candidate window start and end
-- merged presence intervals
-- grace-gap-aware interval merging
+- minimum active member threshold
+- minimum detected-session duration
 - minimum participant presence threshold
+- grace-gap timing
 
-Each candidate participant row stores:
+The snapshot matters because operators may later change channel config. Old detected sessions should still be judged by the settings they were created under.
 
-- first and last seen timestamps inside the candidate window
-- total presence seconds
-- threshold result
-- strength label
+## Step 4: close the detected session
 
-Current strength labels:
+When activity falls below the threshold long enough, GuildRank closes the detected session.
 
-- `strong`
-- `borderline`
-- `weak`
+This creates a clear window that can be reviewed.
 
-### 5. Attach schedule context when possible
+The detected session says:
 
-When a candidate opens or closes, GuildRank tries to attach a matching scheduled session.
+"Here is the time period where this voice activity looked like a real session."
 
-Current matching rules:
+## Step 5: aggregate observed people
+
+After close, GuildRank computes the observed people for that window.
+
+For each observed person, GuildRank can store:
+
+- first seen time
+- last seen time
+- total presence time
+- whether they met the configured threshold
+- evidence strength
+
+Observed people are the evidence pool. They are not yet the official player list.
+
+## Step 6: attach planned session context when possible
+
+GuildRank can try to link a detected session to a planned session.
+
+This match is conservative by design:
 
 - same guild only
-- scheduled session status must be `scheduled`
-- if the schedule has a linked VC, it must match the candidate channel
-- candidate start time must fall within the schedule window
-- if more than one schedule matches, GuildRank does not auto-link one
+- the planned session must still be scheduled
+- if the plan has a linked voice channel, it must match
+- the detected session start time must fit the allowed window
+- if more than one plan matches, GuildRank does not auto-link one
 
-Current time window:
+This match helps an operator understand likely intent.
 
-- up to 45 minutes before scheduled start
-- up to 90 minutes after scheduled start
+It does not make the detected session official.
 
-This schedule link is evidence only.
+## Step 7: operator review paths
 
-### 6. Admin lock-in draft
+Once a detected session exists, operators have several paths.
 
-Operators can save a draft roster with `/session lockin`.
+### Review the detected session
 
-Current rules:
+`/session detected_sessions` lists recent detected sessions.
 
-- candidate must be `closed`
-- candidate participant snapshot must be ready
-- roster must be a subset of the candidate participant pool
-- re-running `/session lockin` replaces the existing draft for that candidate
+`/session detected_session` shows details for one detected session, including observed people and any planned-session context.
 
-If `players` is omitted, lock-in defaults to the threshold-qualified candidate participants.
+### Save lock-in draft truth
 
-Lock-in is still not official truth. It is only a reviewed draft.
+`/session lockin` lets the operator save the player list they currently trust.
 
-### 7. Finalize or discard
+This is draft truth. It is stronger than raw evidence, but it still does not affect stats.
 
-Operators then choose:
+### Start a live session
 
-- `/session finalize`
-- `/session discard`
+`/session start detected_session` lets the operator promote the detected session into a live operational draft.
 
-Finalize creates the official session record.
+This is useful when the game is still happening and the operator wants to actively manage:
 
-Discard closes the workflow without creating an official session.
+- players
+- spectators
+- winner
+- MVP
+- notes
 
-## Observed vs locked vs finalized
+### Finalize
 
-### Observed people
+`/session finalize` turns a reviewed detected session or ended live session into a finalized official event.
 
-Observed people come from `candidate_participants`.
+This is the moment stats move.
 
-They answer:
+### Discard
 
-- who was seen in the voice evidence window
-- how long they were present
+`/session discard` closes the review path without creating an official event.
 
-They do not answer:
+This is the right choice when the evidence looked like a session but should not count officially.
 
-- who actually played
-- who should receive official session credit
+## Why players and spectators stay separate
 
-### Locked players
+This separation is one of the most important design choices in GuildRank.
 
-Locked players come from `session_lockin_drafts` and `session_lockin_draft_players`.
+Detected sessions tell us who was around.
 
-They answer:
+They do not tell us who was actually playing.
 
-- which observed people an admin currently believes actually played
+Live sessions and lock-in drafts let operators separate:
 
-They still do not affect stats by themselves.
+- players
+- spectators
 
-### Finalized official participants
+That makes the final official record much more trustworthy.
 
-Finalized official participants come from the created `events` row plus `event_attendance`.
+## What affects stats and what does not
 
-They answer:
+These do not affect stats by themselves:
 
-- who officially participated
-- which session counts toward official stats
-
-## Finalize roster selection
-
-Current finalize behavior chooses participants in this order:
-
-1. explicit `players` passed to `/session finalize`
-2. otherwise the saved lock-in draft roster
-3. otherwise threshold-qualified candidate participants
-
-All finalize participant lists must still be a subset of the candidate pool.
-
-## Operator command surface
-
-### VC commands
-
-- `/vc track`
-- `/vc config`
-- `/vc list`
-- `/vc untrack`
-
-These require `Manage Server`.
-
-### Session commands for VC-assisted capture
-
-- `/session candidates`
-- `/session candidate`
-- `/session lockin`
-- `/session finalize`
-- `/session discard`
-
-These require `Manage Events` except `/session correct`, which uses `Manage Server`.
-
-Candidate, schedule, lock-in, finalize, and discard paths reply privately.
-
-## Recovery behavior
-
-On startup, GuildRank:
-
-- waits for a short warm-up delay
-- acquires distributed job locks
-- recovers open VC sessions
-- recovers candidate timing
-
-The warm-up reduces false closures from cold caches, but recovery still depends on Discord cache state and is not yet fully hardened for every reconnect edge case.
-
-## What changes stats
-
-VC-assisted objects that do not change stats by themselves:
-
-- tracked VC defaults
-- voice presence segments
-- session candidates
-- candidate participants
-- schedule context on candidates
+- tracked voice channel defaults
+- raw VC activity
+- detected sessions
+- observed people
+- planned-session matches
 - lock-in drafts
+- live sessions
 
-VC-assisted objects that change stats:
+This does affect stats:
 
 - finalized official events
-- their attendance rows
 
-## Current limitations
+## Important safeguards
 
-- no player-facing confirmation flow
+GuildRank keeps several integrity rules around VC-assisted capture:
+
+- a detected session is evidence, not truth
+- a live session must be reviewed before finalization
+- players and spectators must stay separate in live-session drafts
+- one detected session should not branch into multiple conflicting live drafts
+- one live session should not run twice for the same channel at the same time
+
+These rules are intentional. They prevent duplicate or contradictory official records.
+
+## Current limits
+
+VC-assisted capture is strong enough for staged use, but it still has limits:
+
+- no player self-check-in yet
 - no automatic finalize
-- no `/session live` operator view yet
-- no schedule-driven automatic override of candidate game or type
-- schedule context is still advisory unless the operator links it during finalize
-- broad-production hardening is still incomplete
+- no live-session auto-sync after start
+- planned-session matches stay advisory
+- reconnect recovery still depends partly on Discord cache state

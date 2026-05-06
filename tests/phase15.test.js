@@ -4,6 +4,11 @@ const assert = require('node:assert/strict');
 const { checkMutationThrottle, resetThrottleState } = require('../src/utils/throttle');
 const { buildVcCreditDecision } = require('../src/utils/vcCredit');
 const { getDigestKey } = require('../src/utils/digestKey');
+const {
+  DEFAULT_DIGEST_TIME_UTC,
+  shouldSendDigestForConfig,
+} = require('../src/utils/weeklyDigestSchedule');
+const { normalizeGuildRuntimeConfig } = require('../src/utils/guildRuntimeConfig');
 const { readMigrationFiles } = require('../src/utils/migrations');
 const {
   normalizeGameKey,
@@ -19,6 +24,10 @@ const {
   resolveDraftParticipantSelection,
   resolveFinalizeParticipantSelection,
 } = require('../src/utils/sessionLockinRoster');
+const {
+  partitionCandidateRoster,
+  resolveLiveSessionRosterUpdate,
+} = require('../src/utils/liveSessionRoster');
 
 test.beforeEach(() => {
   resetThrottleState();
@@ -65,6 +74,38 @@ test('weekly digest key is stable for a given week', () => {
   assert.equal(getDigestKey(new Date('2026-04-05T23:59:00.000Z')), '2026-03-30');
 });
 
+test('guild runtime config falls back to announce channel for digest and badges', () => {
+  const config = normalizeGuildRuntimeConfig({
+    guild_id: 'guild-1',
+    announce_channel_id: 'announce-1',
+    operator_role_ids: ['role-1', 'role-1', null, ''],
+  });
+
+  assert.equal(config.badge_channel_id, 'announce-1');
+  assert.equal(config.digest_channel_id, 'announce-1');
+  assert.deepEqual(config.operator_role_ids, ['role-1']);
+  assert.equal(config.game_catalog_enabled, false);
+});
+
+test('weekly digest preserves default UTC send time and supports configured time', () => {
+  assert.equal(DEFAULT_DIGEST_TIME_UTC, '20:00');
+  assert.equal(shouldSendDigestForConfig({
+    guild_id: 'guild-1',
+    digest_day: 'friday',
+  }, new Date('2026-05-01T20:00:00.000Z')), true);
+
+  assert.equal(shouldSendDigestForConfig({
+    guild_id: 'guild-1',
+    digest_day: 'friday',
+  }, new Date('2026-05-01T19:59:00.000Z')), false);
+
+  assert.equal(shouldSendDigestForConfig({
+    guild_id: 'guild-1',
+    digest_day: 'friday',
+    digest_time_utc: '18:30',
+  }, new Date('2026-05-01T18:30:00.000Z')), true);
+});
+
 test('migration bundle includes current schema extensions', () => {
   const versions = readMigrationFiles().map(file => file.version);
   assert.ok(versions.includes('000_base_schema'));
@@ -77,6 +118,8 @@ test('migration bundle includes current schema extensions', () => {
   assert.ok(versions.includes('011_scheduled_sessions_slice1'));
   assert.ok(versions.includes('012_candidate_schedule_context'));
   assert.ok(versions.includes('013_session_lockin_drafts'));
+  assert.ok(versions.includes('014_live_sessions'));
+  assert.ok(versions.includes('015_guild_runtime_config'));
 });
 
 test('threshold reached time comes from the nth active member join', () => {
@@ -231,5 +274,39 @@ test('finalize selection prefers lock-in roster before threshold fallback', () =
   assert.deepEqual(result, {
     participantIds: ['user-2'],
     selectionSource: 'lockin_draft',
+  });
+});
+
+test('live session roster preloads lock-in players and keeps the rest as spectators', () => {
+  const result = partitionCandidateRoster([
+    { discord_user_id: 'user-1', met_presence_threshold: true },
+    { discord_user_id: 'user-2', met_presence_threshold: true },
+    { discord_user_id: 'user-3', met_presence_threshold: false },
+  ], ['user-2']);
+
+  assert.deepEqual(result, {
+    playerIds: ['user-2'],
+    spectatorIds: ['user-1', 'user-3'],
+  });
+});
+
+test('live session roster update preserves omitted role and rejects overlap', () => {
+  assert.throws(() => resolveLiveSessionRosterUpdate([
+    { roster_role: 'player', discord_user_id: 'user-1' },
+    { roster_role: 'spectator', discord_user_id: 'user-2' },
+  ], {
+    playerIds: ['user-1', 'user-2'],
+  }), /Players and spectators must stay disjoint/);
+
+  const result = resolveLiveSessionRosterUpdate([
+    { roster_role: 'player', discord_user_id: 'user-1' },
+    { roster_role: 'spectator', discord_user_id: 'user-2' },
+  ], {
+    spectatorIds: ['user-3'],
+  });
+
+  assert.deepEqual(result, {
+    playerIds: ['user-1'],
+    spectatorIds: ['user-3'],
   });
 });

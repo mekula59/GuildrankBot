@@ -1,212 +1,152 @@
 # Scheduled Sessions
 
-## Purpose
+Scheduled sessions are the planning layer in GuildRank.
 
-Scheduled sessions let guild operators store planned session intent without turning that plan into official truth.
+They answer:
 
-This is important for communities that reuse the same voice channels for different games on different days.
+"What do we expect to happen, and when?"
 
-Examples:
+They do not answer:
 
-- Monday 17:00 UTC in one VC means `codm`
-- Friday 17:00 UTC in the same VC means `among_us`
+"What officially happened?"
 
-## Current scope
+That distinction is why planned sessions are useful without being dangerous.
 
-Implemented now:
+## Why planned sessions exist
 
-- `scheduled_sessions` schema
-- `/session schedule`
-- `/session upcoming`
-- `/session cancel`
-- `/session reschedule`
-- optional manual linkage from finalize to a scheduled session
-- conservative schedule context matching for candidates
+Many communities reuse the same voice channels for different games.
 
-Not implemented now:
+For example:
 
-- automatic schedule-driven finalize
-- schedule-driven automatic override of candidate game or type
-- `/session live`
-- player check-in or lock-in from the schedule layer
+- Monday 17:00 UTC in `Game VC` might mean `codm`
+- Friday 17:00 UTC in the same `Game VC` might mean `among_us`
 
-## Data model
+Tracked voice channel defaults are helpful, but they cannot describe every rotating schedule. Planned sessions add that missing intent layer.
 
-Current table: `scheduled_sessions`
+## What a planned session stores
 
-Important fields:
+A planned session can hold:
 
-- `guild_id`
-- `game_key`
-- `session_type`
-- `scheduled_start_at`
-- `input_timezone`
-- `linked_channel_id`
-- `host_discord_user_id`
-- `notes`
-- `status`
-- `completed_event_id`
-
-Current statuses:
-
-- `scheduled`
-- `cancelled`
-- `completed`
-
-All schedule rows are guild-scoped.
-
-## UTC handling
-
-GuildRank stores `scheduled_start_at` as UTC-safe `timestamptz`.
-
-Current command input expects:
-
-- ISO datetime with `Z`, or
-- ISO datetime with an explicit offset
-
-Examples:
-
-- `2026-05-01T17:00:00Z`
-- `2026-05-01T18:00:00+01:00`
-
-The optional timezone field is currently a display and audit label, not a conversion source of truth.
-
-## Command surface
-
-### `/session schedule`
-
-Creates a new scheduled session with:
-
-- `game`
-- `session_type`
-- `start_time`
-- optional `timezone`
-- optional `voice_channel`
-- optional `host`
-- optional `notes`
-
-### `/session upcoming`
-
-Lists scheduled sessions with `status = scheduled`.
-
-### `/session cancel`
-
-Moves a scheduled session from `scheduled` to `cancelled`.
-
-Completed schedules cannot be cancelled.
-
-### `/session reschedule`
-
-Updates a still-scheduled session.
-
-Current editable fields:
-
-- start time
-- timezone label
 - game
 - session type
+- planned start time
+- timezone label
 - linked voice channel
 - host
 - notes
 
-Cancelled or completed schedules cannot be rescheduled.
+GuildRank stores the real time as a UTC-safe timestamp.
 
-## Candidate schedule context
+The timezone field is for display and operator context, not the source of truth for conversion.
 
-GuildRank now lets a candidate carry optional schedule context.
+## Where planned sessions fit in the lifecycle
 
-This is stored on the candidate as:
+Planned sessions sit near the start of the game-night flow:
 
-- `scheduled_session_id`
-- `schedule_match_status`
-- `schedule_match_checked_at`
+1. planned session
+2. community announcement outside GuildRank, if your server uses one
+3. detected session from voice activity
+4. live session
+5. ended live session
+6. finalized official event
 
-Current match statuses:
+The planned session tells GuildRank what the night was supposed to be.
 
-- `matched`
-- `ambiguous`
-- `none`
+The finalized official event tells GuildRank what the night officially became.
 
-## Current matching rules
+## Commands
 
-The candidate schedule matcher is deliberately conservative.
+### `/session schedule`
 
-Rules:
+Creates a planned session.
+
+Use it when the guild knows the expected game, time, and session type ahead of time.
+
+### `/session upcoming`
+
+Lists the planned sessions that are still scheduled.
+
+Use it to check what is coming up.
+
+### `/session cancel`
+
+Cancels a planned session.
+
+Use it when the session is no longer happening.
+
+### `/session reschedule`
+
+Updates a planned session that is still active.
+
+Use it when the start time, game, host, linked voice channel, or notes change.
+
+## How planned sessions connect to detected sessions
+
+When GuildRank opens or closes a detected session, it can try to match it to a planned session.
+
+That match is conservative:
 
 - same guild only
-- schedule must still be `scheduled`
-- if the schedule has a linked VC, it must match the candidate channel
-- candidate start time must fall within the configured time window
-- if multiple schedules match, GuildRank does not auto-link any of them
+- planned session must still be scheduled
+- if a voice channel is linked, it must match
+- detected-session start time must land in the allowed window
+- ambiguous matches stay unlinked
 
-Current time window:
+This is evidence, not official truth.
 
-- 45 minutes before scheduled start
-- 90 minutes after scheduled start
+The match helps an operator understand likely intent, but it does not auto-finalize anything.
 
-## Evidence vs official truth
+## How planned sessions connect to live sessions
 
-This is the most important rule in the current implementation.
+`/session start` can begin a live session from a planned session.
 
-### Schedule intent
+This is useful when the operator wants to say:
 
-A scheduled session means:
+"The planned game is starting now, and I want to manage the draft roster and result while it happens."
 
-- an operator planned something
+Starting a live session from a planned session still does not affect stats.
 
-It does **not** mean:
+## How planned sessions connect to finalized official events
 
-- the session happened
-- the VC occupants were actual players
-- official stats should change
+During `/session finalize`, an operator can link the finalized official event to a planned session.
 
-### Candidate schedule match
+This is the point where the plan and the official result are joined.
 
-A matched schedule on a candidate means:
+The plan itself never moves stats.
 
-- GuildRank found one plausible planned context for that candidate
+The finalized official event does.
 
-It does **not** mean:
+## What planned sessions do not mean
 
-- the candidate is automatically official
-- the candidate game or type is automatically overridden
-- the official session is automatically linked
+A planned session does not mean:
 
-### Finalize linkage
+- the game really happened
+- everyone in the linked voice channel played
+- the final game label must match the original plan
+- the final session type must match the original plan
+- stats should move automatically
 
-An operator may explicitly pass `scheduled_session_id` during `/session finalize`.
+Planned sessions are for context, scheduling, and operator guidance.
 
-If the scheduled session is valid:
+## What affects stats and what does not
 
-- `events.scheduled_session_id` is set
-- the schedule is marked `completed`
+These do not affect stats by themselves:
 
-This is still a manual operator decision in the current implementation.
+- planned sessions
+- cancelled planned sessions
+- planned-session matches on detected sessions
+- live sessions started from planned sessions
 
-## Current operator workflow
+This does affect stats:
 
-1. Create a plan with `/session schedule`.
-2. Let GuildRank observe VC activity and possibly attach schedule context to a candidate.
-3. Review the candidate and its schedule context privately.
-4. Optionally lock in a player roster.
-5. Finalize manually, optionally passing the scheduled session ID.
+- finalized official events
 
-## What affects stats
+## Current limits
 
-Does not affect stats:
+Planned sessions are intentionally modest in scope right now:
 
-- scheduled sessions
-- cancelled schedules
-- candidate schedule matches
-
-Does affect stats:
-
-- finalized official sessions
-
-## Current limitations
-
-- schedule matching is advisory only
-- ambiguous schedule windows stay unlinked by design
-- schedules do not yet drive automatic game or type inheritance at finalize time
-- there is no schedule-native live roster workflow yet
-- there is no automatic schedule completion without finalize
+- they do not auto-create official results
+- they do not auto-credit players
+- they do not auto-override detected-session context
+- they do not provide player check-in yet
+- they still rely on operator finalization

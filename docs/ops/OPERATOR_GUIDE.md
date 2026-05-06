@@ -1,95 +1,76 @@
 # Operator Guide
 
-## Purpose
+GuildRank helps operators turn a messy game night into a clean official record.
 
-This guide is for guild operators running GuildRank in a real community.
+The short version is simple:
 
-It focuses on:
+- plan the session if you know it ahead of time
+- let GuildRank watch voice activity
+- review the detected session
+- lock in the real players if needed
+- run the live session flow if you want to manage the game while it is happening
+- finalize the result when you are sure it is correct
 
-- what commands exist now
-- who can run them
-- what each workflow actually does
-- what changes stats and what does not
+## Read this first
 
-## Prerequisites
+GuildRank is careful on purpose.
 
-Before using these commands:
+Voice activity is evidence.
 
-- the bot must be installed in the guild
-- `/setup` must have been completed
-- the current migration bundle must already be applied
+Detected sessions are evidence.
 
-## Permissions
+Lock-in is draft truth.
 
-### `/vc` commands
+Live sessions are draft operational state.
 
-Require `Manage Server`.
+Only finalized official events move official stats.
 
-Current commands:
+If you remember only one thing, remember that GuildRank does not treat people in voice chat as official players until an operator finalizes the result.
 
-- `/vc track`
-- `/vc config`
-- `/vc list`
-- `/vc untrack`
+## Who can use what
 
-### `/session` commands
+`/vc` commands require `Manage Server`.
 
-Most require `Manage Events`.
+Most `/session` commands require `Manage Events`.
 
-Current commands:
+`/session correct` requires `Manage Server` because it voids a manual official event and rebuilds stats.
 
-- `/session attendance`
-- `/session log`
-- `/session schedule`
-- `/session upcoming`
-- `/session cancel`
-- `/session reschedule`
-- `/session candidates`
-- `/session candidate`
-- `/session lockin`
-- `/session finalize`
-- `/session discard`
+## Before you start
 
-### `/session correct`
+Before using the session workflows:
 
-Requires `Manage Server`.
+- install the bot in the guild
+- run `/setup`
+- apply the latest database migrations
+- redeploy slash commands after command name or option name changes
 
-## Stats rules operators should remember
+## How a normal game night flows
 
-These change stats:
+GuildRank fits a game-night flow that looks like this:
 
-- `/session attendance`
-- `/session log`
-- `/session finalize`
-- passive VC attendance and credited VC minutes
+1. Someone plans the session.
+2. The community may get an announcement outside GuildRank or through your normal ops process.
+3. GuildRank sees voice activity and creates a detected session.
+4. An operator reviews who was actually playing.
+5. The operator can start a live session if they want to manage the roster and result while the game is active.
+6. The live session is ended when the game finishes.
+7. The final result is reviewed and turned into a finalized official event.
 
-These do **not** change stats by themselves:
+The announcement step is part of real community operations, but it is not currently a GuildRank command. GuildRank starts with the planned session and continues through detection, draft review, and finalization.
 
-- `/vc track`
-- `/vc config`
-- `/vc untrack`
-- `/session schedule`
-- `/session upcoming`
-- `/session cancel`
-- `/session reschedule`
-- `/session candidates`
-- `/session candidate`
-- `/session lockin`
-- `/session discard`
+## Voice channel setup
 
-## Recommended workflow
+Use `/vc track` once for each voice channel that GuildRank should watch.
 
-## 1. Configure tracked voice defaults
-
-Use `/vc track` for each normal voice room you want GuildRank to observe.
-
-Primary fields:
+The main fields are:
 
 - `channel`
 - `game`
 - `session_type`
 
-Use short reusable labels such as:
+Think of this as saving defaults, not hard rules.
+
+Examples of good game labels:
 
 - `codm`
 - `among_us`
@@ -97,149 +78,232 @@ Use short reusable labels such as:
 - `general_gaming`
 - `mixed`
 
-If you need non-default detection behavior, use `/vc config`.
+Use `/vc config` only when a channel needs custom detection thresholds.
 
-## 2. Optionally schedule planned sessions
+Use `/vc list` to review what is tracked.
 
-Use:
+Use `/vc untrack` to stop watching a voice channel.
 
-- `/session schedule`
-- `/session upcoming`
-- `/session reschedule`
-- `/session cancel`
+## Planned sessions
 
-Schedules are planning context only. They do not create official session credit.
+Planned sessions answer one question:
 
-## 3. Review VC-assisted candidates
+"What do we expect to happen?"
 
-Use:
+They do not answer:
 
-- `/session candidates`
-- `/session candidate`
+"What officially happened?"
 
-These views are private and help operators inspect:
+### `/session schedule`
 
-- candidate status
-- candidate time window
-- observed participant rows
-- schedule context, if any
-- locked roster, if any
+Use this when you know a session ahead of time.
 
-### Important interpretation rule
+Fields:
 
-The candidate participant list shows observed people in the VC evidence window.
-It is not the same thing as the official player list.
+- `game`
+- `session_type`
+- `start_time`
+- `timezone`
+- `voice_channel`
+- `host`
+- `notes`
 
-## 4. Save a draft locked roster
+### `/session upcoming`
 
-Use `/session lockin` on a closed candidate.
+Use this to review upcoming planned sessions.
 
-You can:
+### `/session cancel`
 
-- provide explicit `players`, or
-- omit `players` and let GuildRank start from threshold-qualified participant rows
+Use this when the plan is no longer happening.
 
-This creates or replaces the draft roster for that candidate.
+### `/session reschedule`
 
-Lock-in is still not official. It is a reviewed draft.
+Use this when the time, game, host, linked voice channel, or notes change.
 
-## 5. Finalize or discard
+Planned sessions do not affect stats by themselves.
 
-### Finalize
+## Detected sessions
 
-Use `/session finalize` when the candidate should become an official session.
+A detected session is GuildRank saying:
 
-Current participant selection order:
+"I saw voice activity that looks like a possible game session."
+
+That is useful, but it is still evidence.
+
+### `/session detected_sessions`
+
+Lists recent detected sessions in the server.
+
+Use it to find the right session by channel, game label, start time, and status.
+
+### `/session detected_session`
+
+Shows details for one detected session.
+
+Use it to review:
+
+- the channel
+- the time window
+- the observed people
+- how long they were present
+- whether there is planned session context
+- whether a lock-in draft already exists
+
+### `/session lockin`
+
+Creates or replaces a draft player list for a closed detected session.
+
+Use `players` with Discord mentions when you know exactly who played.
+
+If you omit `players`, GuildRank starts from the observed people who met the configured threshold.
+
+Lock-in is draft truth. It is the operator saying, "This is the roster I currently trust."
+
+### `/session discard`
+
+Use this when a detected session should not become an official event.
+
+Typical reasons:
+
+- social voice activity
+- a false positive
+- a test session
+- the wrong group in the wrong channel
+
+Discard does not affect stats.
+
+## Live sessions
+
+Live sessions are for operators who want to manage the real game while it is happening.
+
+They are still draft state until finalized.
+
+### `/session start`
+
+Starts a live session draft.
+
+You can start from:
+
+- `detected_session`
+- `planned_session`
+- `channel`
+
+Optional fields:
+
+- `game`
+- `session_type`
+- `notes`
+
+Use `detected_session` when GuildRank already found the session.
+
+Use `planned_session` when the session was scheduled ahead of time and you want to begin from the plan.
+
+Use `channel` when you want to start directly from a tracked voice channel.
+
+### `/session update`
+
+Updates the live draft.
+
+You can replace:
+
+- `players`
+- `spectators`
+- `winner`
+- `mvp`
+- `notes`
+
+Players and spectators must be different people.
+
+Winner and MVP must be players.
+
+### `/session end`
+
+Marks the live session as ended.
+
+This means the game is over, but the result is still draft state until finalized.
+
+### `/session finalize`
+
+Creates the finalized official event from:
+
+- a closed detected session
+- an ended live session
+
+This is the only step in the VC-assisted flow that moves official stats.
+
+For detected sessions, GuildRank chooses the player roster in this order:
 
 1. explicit `players` passed to finalize
-2. otherwise the saved lock-in draft roster
-3. otherwise threshold-qualified candidate participants
+2. saved lock-in roster
+3. threshold-qualified observed people
 
-You can also pass:
+For live sessions, GuildRank uses the live session player list unless the operator provides an allowed override.
 
-- optional `scheduled_session_id`
-- optional `winner`
-- optional `mvp`
-- optional `notes`
+## Manual official logging
 
-Finalize creates the official event and updates stats.
+Sometimes the VC-assisted flow is not the right tool.
 
-### Discard
+### `/session attendance`
 
-Use `/session discard` when the candidate should not become an official session.
+Creates an official casual attendance event directly.
 
-Discard keeps the audit trail but does not create official session credit.
+### `/session log`
 
-## Manual logging workflow
+Creates an official competitive event directly.
 
-Use direct manual commands when VC-assisted capture is not the right tool.
+Use it when you already know the player list and result.
 
-### Casual attendance
+### `/session correct`
 
-`/session attendance`
+Voids a manual official event and rebuilds stats.
 
-Use when you just need to mark who attended.
+Use it only when the recorded manual result was wrong.
 
-### Competitive result logging
+## What changes stats and what does not
 
-`/session log`
+These do not change stats by themselves:
 
-Use when you need:
+- tracked voice channel defaults
+- planned sessions
+- detected sessions
+- observed people
+- lock-in drafts
+- live sessions
+- ended live sessions
+- discarded detected sessions
 
-- winner
-- MVP
-- notes
+These do change stats:
 
-### Manual correction
+- manual official events from `/session attendance`
+- manual official events from `/session log`
+- finalized official events from `/session finalize`
 
-`/session correct`
+## Recommended operator workflow
 
-Use when a manual session needs to be voided and stats rebuilt.
+For most communities, this is the safest pattern:
 
-## Current command quick reference
+1. Track the main voice channels with `/vc track`.
+2. Schedule important nights with `/session schedule`.
+3. Let GuildRank create detected sessions from voice activity.
+4. Review the detected session.
+5. Save a lock-in draft if the observed roster needs cleanup.
+6. Start a live session if you want to manage players, spectators, winner, MVP, and notes during the game.
+7. End the live session when the game finishes.
+8. Finalize the result once the roster and outcome are correct.
 
-### VC defaults
+## Common mistakes to avoid
 
-- `/vc track`: save default profile for one VC
-- `/vc config`: tune advanced candidate thresholds
-- `/vc list`: show saved VC default profiles
-- `/vc untrack`: disable tracking for one VC
+- Do not treat everyone in voice chat as an official player automatically.
+- Do not assume a planned session means the game really happened.
+- Do not assume a detected session is already official.
+- Do not forget that lock-in and live sessions are still draft state.
+- Do not start a second live session for the same detected session or channel while the first draft still exists.
 
-### Scheduling
+## Current limits operators should know
 
-- `/session schedule`: create a future planned session
-- `/session upcoming`: list currently scheduled sessions
-- `/session cancel`: cancel a scheduled session
-- `/session reschedule`: update a scheduled session
-
-### VC-assisted review
-
-- `/session candidates`: list candidates
-- `/session candidate`: inspect one candidate
-- `/session lockin`: create or replace a draft roster
-- `/session finalize`: create the official session
-- `/session discard`: discard a candidate
-
-### Manual stats workflows
-
-- `/session attendance`
-- `/session log`
-- `/session correct`
-
-## Current limitations operators should know
-
-- startup recovery is improved but still not fully hardened against every reconnect edge case
-- command throttling is not yet truly distributed across multiple bot instances
-- schedule matching is evidence only unless an operator links a schedule during finalize
-- lock-in is admin-only; there is no player-facing confirmation flow yet
-- stage channels are not supported by `/vc track`
-
-## Recommended beta operating mode
-
-For limited monitored beta:
-
-- prefer one app instance
-- run staging before production
-- actively watch restart and finalize logs
-- avoid changing tracked VC thresholds on hot candidates unless necessary
-- keep operators aligned on what counts as observed people versus locked players versus finalized official participants
+- GuildRank does not auto-finalize sessions.
+- Players cannot self-check in yet.
+- Lock-in is admin-only.
+- Live sessions do not keep auto-syncing with voice occupancy after start.
+- Planned session matches are advisory context, not automatic truth.
+- Recovery after reconnects still depends partly on Discord cache state.

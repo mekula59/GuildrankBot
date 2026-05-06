@@ -4,7 +4,7 @@ const supabase = require('../utils/supabase');
 const logger = require('../utils/logger');
 const { ensurePlayerProfile, finalizeVcSession } = require('../utils/stats');
 const { formatBadges } = require('../utils/badges');
-const { isSetup, getGuildConfig } = require('../utils/guilds');
+const { isSetup, getGuildRuntimeConfig } = require('../utils/guilds');
 const { syncVoicePresenceFromStateChange } = require('../utils/voicePresence');
 const { syncSessionCandidatesFromStateChange } = require('../utils/sessionCandidates');
 const { BRAND_COLOR } = require('../../config/constants');
@@ -58,6 +58,7 @@ async function markChannelHasCompanions(guild, channelId) {
   const { error } = await supabase
     .from('vc_sessions')
     .update({ had_companion: true })
+    .eq('guild_id', guild.id)
     .in('id', uniqueSessionIds);
 
   if (error) throw error;
@@ -88,6 +89,7 @@ async function startVcSession({ userId, guildId, channelId, joinedAt, member }) 
     const { error: updateError } = await supabase
       .from('vc_sessions')
       .update({ channel_id: channelId })
+      .eq('guild_id', guildId)
       .eq('id', existingSession.id);
 
     if (updateError) throw updateError;
@@ -293,6 +295,7 @@ module.exports = {
           const { error: updateError } = await supabase
             .from('vc_sessions')
             .update({ channel_id: newState.channelId })
+            .eq('guild_id', guildId)
             .eq('id', session.sessionId);
 
           if (updateError) throw updateError;
@@ -314,10 +317,11 @@ module.exports = {
 
 async function announceBadge(guild, username, newBadgeIds, stats) {
   try {
-    const config = await getGuildConfig(guild.id);
-    if (!config?.announce_channel_id) return;
+    const config = await getGuildRuntimeConfig(guild.id);
+    const badgeChannelId = config?.badge_channel_id || config?.announce_channel_id;
+    if (!badgeChannelId) return;
 
-    const channel = guild.channels.cache.get(config.announce_channel_id);
+    const channel = guild.channels.cache.get(badgeChannelId);
     if (!channel) return;
 
     await channel.send({
@@ -381,6 +385,7 @@ async function recoverOpenSessions(client) {
         const { error: updateError } = await supabase
           .from('vc_sessions')
           .update({ channel_id: voiceState.channelId })
+          .eq('guild_id', session.guild_id)
           .eq('id', session.id);
 
         if (updateError) throw updateError;
