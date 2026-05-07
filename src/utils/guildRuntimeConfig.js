@@ -6,6 +6,8 @@ const DEFAULT_RUNTIME_CONFIG = {
   operator_role_ids: [],
   game_catalog_enabled: false,
   participant_reward_role_id: null,
+  player_reward_role_id: null,
+  spectator_reward_role_id: null,
   participant_reward_enabled: false,
   participant_reward_scope: 'players_only',
 };
@@ -22,7 +24,13 @@ function normalizeOperatorRoleIds(value) {
 }
 
 function normalizeParticipantRewardScope(value) {
-  return value === 'players_and_spectators' ? 'players_and_spectators' : 'players_only';
+  const allowed = new Set([
+    'players_only',
+    'spectators_only',
+    'players_and_spectators',
+    'separate_roles',
+  ]);
+  return allowed.has(value) ? value : 'players_only';
 }
 
 function normalizeGuildRuntimeConfig(config = null) {
@@ -41,6 +49,8 @@ function normalizeGuildRuntimeConfig(config = null) {
     operator_role_ids: normalizeOperatorRoleIds(config.operator_role_ids),
     game_catalog_enabled: config.game_catalog_enabled === true,
     participant_reward_role_id: normalizeOptionalString(config.participant_reward_role_id),
+    player_reward_role_id: normalizeOptionalString(config.player_reward_role_id),
+    spectator_reward_role_id: normalizeOptionalString(config.spectator_reward_role_id),
     participant_reward_enabled: config.participant_reward_enabled === true,
     participant_reward_scope: normalizeParticipantRewardScope(config.participant_reward_scope),
   };

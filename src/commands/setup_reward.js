@@ -16,11 +16,33 @@ module.exports = {
     .addSubcommand(subcommand =>
       subcommand
         .setName('role')
+        .setDescription('Set the shared Discord role GuildRank gives after finalize')
+        .addRoleOption(option =>
+          option
+            .setName('role')
+            .setDescription('Shared reward role to assign after finalize')
+            .setRequired(true)
+        )
+    )
+    .addSubcommand(subcommand =>
+      subcommand
+        .setName('player_role')
         .setDescription('Set the Discord role GuildRank gives finalized players')
         .addRoleOption(option =>
           option
             .setName('role')
-            .setDescription('Reward role to assign after finalize')
+            .setDescription('Player reward role to assign after finalize')
+            .setRequired(true)
+        )
+    )
+    .addSubcommand(subcommand =>
+      subcommand
+        .setName('spectator_role')
+        .setDescription('Set the Discord role GuildRank gives finalized spectators')
+        .addRoleOption(option =>
+          option
+            .setName('role')
+            .setDescription('Spectator reward role to assign after finalize')
             .setRequired(true)
         )
     )
@@ -46,7 +68,9 @@ module.exports = {
             .setRequired(true)
             .addChoices(
               { name: 'Players only', value: 'players_only' },
+              { name: 'Spectators only', value: 'spectators_only' },
               { name: 'Players and spectators', value: 'players_and_spectators' },
+              { name: 'Separate player and spectator roles', value: 'separate_roles' },
             )
         )
     )
@@ -83,8 +107,44 @@ module.exports = {
         const config = normalizeGuildRuntimeConfig(saved);
 
         return interaction.editReply([
-          `✅ Participant reward role set to <@&${config.participant_reward_role_id}>.`,
+          `✅ Shared participant reward role set to <@&${config.participant_reward_role_id}>.`,
           'GuildRank will assign it only after `/session finalize` succeeds.',
+        ].join('\n'));
+      }
+
+      if (subcommand === 'player_role') {
+        const role = interaction.options.getRole('role', true);
+        if (!hasRewardRolePermission(interaction.guild.members.me, role)) {
+          return interaction.editReply('❌ GuildRank cannot assign that role yet. Give the bot Manage Roles and move the GuildRank bot role above the reward role.');
+        }
+
+        const saved = await saveGuildConfig(interaction.guildId, {
+          player_reward_role_id: role.id,
+          participant_reward_enabled: true,
+        });
+        const config = normalizeGuildRuntimeConfig(saved);
+
+        return interaction.editReply([
+          `✅ Player reward role set to <@&${config.player_reward_role_id}>.`,
+          'Use `/setup_reward scope scope:separate_roles` when players and spectators should receive different roles.',
+        ].join('\n'));
+      }
+
+      if (subcommand === 'spectator_role') {
+        const role = interaction.options.getRole('role', true);
+        if (!hasRewardRolePermission(interaction.guild.members.me, role)) {
+          return interaction.editReply('❌ GuildRank cannot assign that role yet. Give the bot Manage Roles and move the GuildRank bot role above the reward role.');
+        }
+
+        const saved = await saveGuildConfig(interaction.guildId, {
+          spectator_reward_role_id: role.id,
+          participant_reward_enabled: true,
+        });
+        const config = normalizeGuildRuntimeConfig(saved);
+
+        return interaction.editReply([
+          `✅ Spectator reward role set to <@&${config.spectator_reward_role_id}>.`,
+          'Use `/setup_reward scope scope:separate_roles` when players and spectators should receive different roles.',
         ].join('\n'));
       }
 
@@ -111,7 +171,9 @@ module.exports = {
       const config = normalizeGuildRuntimeConfig(existing);
       return interaction.editReply([
         `Enabled: \`${config.participant_reward_enabled}\``,
-        `Role: ${config.participant_reward_role_id ? `<@&${config.participant_reward_role_id}>` : 'not set'}`,
+        `Shared role: ${config.participant_reward_role_id ? `<@&${config.participant_reward_role_id}>` : 'not set'}`,
+        `Player role: ${config.player_reward_role_id ? `<@&${config.player_reward_role_id}>` : 'not set'}`,
+        `Spectator role: ${config.spectator_reward_role_id ? `<@&${config.spectator_reward_role_id}>` : 'not set'}`,
         `Scope: \`${config.participant_reward_scope}\``,
         'Rewards are assigned only after `/session finalize` succeeds.',
       ].join('\n'));

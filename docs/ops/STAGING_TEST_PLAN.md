@@ -84,16 +84,21 @@ Verify the detail view shows:
 
 ## Participant reward role checks
 
-1. Create or choose a test reward role below the GuildRank bot role.
-2. Run `/setup_reward role` with that role.
+1. Create or choose shared, player, and spectator test reward roles below the GuildRank bot role.
+2. Run `/setup_reward role` with the shared role.
 3. Run `/setup_reward enabled enabled:true`.
 4. Run `/setup_reward scope scope:players_only`.
 5. Run `/setup_reward status` and verify the role, enabled state, and scope.
 6. Finalize a live session with at least one player.
 7. Verify finalized players receive the role.
 8. Verify spectators do not receive the role while scope is `players_only`.
-9. Remove the bot `Manage Roles` permission or move the reward role above the bot role in staging.
-10. Finalize another session and verify finalization succeeds while the reward summary reports the permission or hierarchy problem.
+9. Run `/setup_reward scope scope:spectators_only`, finalize a live session with spectators, and verify only spectators receive the shared role.
+10. Run `/setup_reward scope scope:players_and_spectators`, finalize a live session, and verify players and spectators receive the shared role.
+11. Run `/setup_reward player_role` and `/setup_reward spectator_role`, then set `/setup_reward scope scope:separate_roles`.
+12. Finalize a live session and verify players receive the player role while spectators receive the spectator role.
+13. Clear or omit one required separate role in staging and verify finalization still succeeds while the reward summary warns about the missing role.
+14. Remove the bot `Manage Roles` permission or move a reward role above the bot role in staging.
+15. Finalize another session and verify finalization succeeds while the reward summary reports the permission or hierarchy problem.
 
 ## Finalize checks
 

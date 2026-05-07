@@ -5,6 +5,8 @@ const { checkMutationThrottle, resetThrottleState } = require('../src/utils/thro
 const { buildVcCreditDecision } = require('../src/utils/vcCredit');
 const { getDigestKey } = require('../src/utils/digestKey');
 const {
+  assignParticipantRewardRoles,
+  buildRewardBuckets,
   buildRewardParticipantIds,
   formatRewardSummary,
 } = require('../src/utils/participantRewards');
@@ -93,6 +95,8 @@ test('guild runtime config falls back to announce channel for digest and badges'
   assert.equal(config.game_catalog_enabled, false);
   assert.equal(config.participant_reward_enabled, false);
   assert.equal(config.participant_reward_scope, 'players_only');
+  assert.equal(config.player_reward_role_id, null);
+  assert.equal(config.spectator_reward_role_id, null);
 });
 
 test('weekly digest preserves default UTC send time and supports configured time', () => {
@@ -130,6 +134,7 @@ test('migration bundle includes current schema extensions', () => {
   assert.ok(versions.includes('015_guild_runtime_config'));
   assert.ok(versions.includes('016_live_session_checkins'));
   assert.ok(versions.includes('017_participant_reward_roles'));
+  assert.ok(versions.includes('018_separate_player_viewer_rewards'));
 });
 
 test('threshold reached time comes from the nth active member join', () => {
@@ -373,6 +378,112 @@ test('participant rewards default to finalized players only', () => {
   }), ['user-1', 'spectator-1']);
 });
 
+test('participant reward scopes choose the expected roster members', () => {
+  const people = [
+    { discord_user_id: 'player-1', roster_role: 'player' },
+    { discord_user_id: 'spectator-1', roster_role: 'spectator' },
+    { discord_user_id: 'spectator-2', roster_role: 'spectator' },
+  ];
+
+  assert.deepEqual(buildRewardParticipantIds({
+    participantIds: ['player-1'],
+    people,
+    scope: 'spectators_only',
+  }), ['spectator-1', 'spectator-2']);
+
+  assert.deepEqual(buildRewardParticipantIds({
+    participantIds: ['player-1'],
+    people,
+    scope: 'players_and_spectators',
+  }), ['player-1', 'spectator-1', 'spectator-2']);
+
+  assert.deepEqual(buildRewardBuckets({
+    participantIds: ['player-1'],
+    people,
+    config: {
+      participant_reward_scope: 'separate_roles',
+      player_reward_role_id: 'player-role',
+      spectator_reward_role_id: 'viewer-role',
+    },
+  }), [
+    { label: 'players', roleId: 'player-role', userIds: ['player-1'] },
+    { label: 'spectators', roleId: 'viewer-role', userIds: ['spectator-1', 'spectator-2'] },
+  ]);
+});
+
+test('participant reward role assignment skips bots and keeps finalize non-blocking', async () => {
+  const added = [];
+  const makeMember = (id, bot = false) => ({
+    id,
+    user: { bot },
+    roles: {
+      cache: { has: () => false },
+      add: async roleId => { added.push(`${id}:${roleId}`); },
+    },
+  });
+  const members = new Map([
+    ['player-1', makeMember('player-1')],
+    ['spectator-1', makeMember('spectator-1')],
+    ['bot-1', makeMember('bot-1', true)],
+  ]);
+  const roles = new Map([
+    ['player-role', { id: 'player-role' }],
+    ['viewer-role', { id: 'viewer-role' }],
+  ]);
+  const guild = {
+    roles: {
+      cache: roles,
+      fetch: async id => roles.get(id) || null,
+    },
+    members: {
+      me: {
+        permissions: { has: () => true },
+        roles: { highest: { comparePositionTo: () => 1 } },
+      },
+      cache: members,
+      fetch: async id => members.get(id) || null,
+    },
+  };
+
+  const summary = await assignParticipantRewardRoles({
+    guild,
+    guildId: 'guild-1',
+    config: {
+      participant_reward_enabled: true,
+      participant_reward_scope: 'separate_roles',
+      player_reward_role_id: 'player-role',
+      spectator_reward_role_id: 'viewer-role',
+    },
+    participantIds: ['player-1', 'bot-1'],
+    people: [
+      { discord_user_id: 'spectator-1', roster_role: 'spectator' },
+    ],
+  });
+
+  assert.equal(summary.assigned, 2);
+  assert.equal(summary.skipped, 1);
+  assert.equal(summary.failed, 0);
+  assert.deepEqual(added, ['player-1:player-role', 'spectator-1:viewer-role']);
+
+  const missingRoleSummary = await assignParticipantRewardRoles({
+    guild,
+    guildId: 'guild-1',
+    config: {
+      participant_reward_enabled: true,
+      participant_reward_scope: 'separate_roles',
+      player_reward_role_id: null,
+      spectator_reward_role_id: 'viewer-role',
+    },
+    participantIds: ['player-1'],
+    people: [
+      { discord_user_id: 'spectator-1', roster_role: 'spectator' },
+    ],
+  });
+
+  assert.equal(missingRoleSummary.assigned, 1);
+  assert.match(formatRewardSummary(missingRoleSummary), /No reward role is configured for players/);
+});
+
 test('participant reward summary explains disabled and permission states', () => {
   assert.equal(formatRewardSummary({ enabled: false }), 'Participant reward role is disabled.');
   assert.match(formatRewardSummary({
@@ -381,6 +492,6 @@ test('participant reward summary explains disabled and permission states', () =>
     assigned: 0,
     skipped: 0,
     failed: 0,
-    reason: 'missing_permission_or_hierarchy',
+    warnings: ['GuildRank cannot assign the players reward role yet. Give the bot Manage Roles and move the GuildRank bot role above the reward role.'],
   }), /Manage Roles/);
 });

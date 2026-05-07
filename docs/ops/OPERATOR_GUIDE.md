@@ -44,24 +44,34 @@ Before using the session workflows:
 - apply the latest database migrations
 - redeploy slash commands after command name or option name changes
 
-## Participant reward role
+## Participant reward roles
 
-GuildRank can assign a Discord role to finalized players after a game night.
+GuildRank can assign Discord roles after a game night is finalized. This can be a shared participant role, a player-only role, a spectator-only role, or separate roles for players and viewers.
 
 This is intentionally tied to finalization:
 
 - no reward role is assigned from voice activity alone
 - no reward role is assigned from player self check-in
 - no reward role is assigned when a live session starts or ends
-- the reward role is assigned only after `/session finalize` succeeds
+- reward roles are assigned only after `/session finalize` succeeds
 
 This keeps the trust model clear: evidence plus confirmation plus operator approval becomes the official reward.
 
 ### `/setup_reward role`
 
-Sets the Discord role GuildRank should assign to finalized players.
+Sets a shared Discord role.
+
+Use this for `players_only`, `spectators_only`, or `players_and_spectators`.
 
 GuildRank checks whether the bot can manage that role before saving it. If setup fails, give the bot `Manage Roles` and move the GuildRank bot role above the reward role.
+
+### `/setup_reward player_role`
+
+Sets the Discord role GuildRank should give finalized players when the scope is `separate_roles`.
+
+### `/setup_reward spectator_role`
+
+Sets the Discord role GuildRank should give finalized spectators when the scope is `separate_roles`.
 
 ### `/setup_reward enabled`
 
@@ -71,11 +81,16 @@ Turns participant reward role assignment on or off.
 
 Chooses who can receive the role.
 
-The first supported production behavior is `players_only`. `players_and_spectators` is reserved for communities that explicitly choose that scope later.
+- `players_only` gives the shared reward role to finalized players only.
+- `spectators_only` gives the shared reward role to finalized spectators only.
+- `players_and_spectators` gives the shared reward role to finalized players and finalized spectators.
+- `separate_roles` gives the player reward role to finalized players and the spectator reward role to finalized spectators.
+
+If a needed role is missing or GuildRank cannot manage it, finalization still succeeds. The finalize response shows a warning so an operator can fix the Discord role setup.
 
 ### `/setup_reward status`
 
-Shows the current reward role settings.
+Shows the current reward role settings, including the shared role, player role, spectator role, enabled state, and scope.
 
 ## How a normal game night flows
 
