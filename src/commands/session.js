@@ -932,6 +932,7 @@ async function handleLiveSessionUpdate(interaction) {
     guildId: interaction.guildId,
     liveSessionId,
     actorDiscordId: interaction.user.id,
+    gameKey: interaction.options.getString('game') ?? undefined,
     playerIds: playerMentions
       ? await resolveMentionedGuildUserIds(interaction, playerMentions, { fieldName: 'players' })
       : undefined,
@@ -1441,7 +1442,7 @@ module.exports = {
     .addSubcommand(subcommand =>
       subcommand
         .setName('update')
-        .setDescription('Update the draft players, spectators, result, or notes for a live session')
+        .setDescription('Update the draft game label, roster, result, or notes for a live session')
         .addStringOption(option =>
           option
             .setName('live_session')
@@ -1452,6 +1453,7 @@ module.exports = {
         )
         .addStringOption(option => option.setName('players').setDescription('Optional player roster replacement using mentions').setRequired(false).setMaxLength(500))
         .addStringOption(option => option.setName('spectators').setDescription('Optional spectator roster replacement using mentions').setRequired(false).setMaxLength(500))
+        .addStringOption(option => option.setName('game').setDescription('Optional corrected game label for this live session').setRequired(false).setMaxLength(80))
         .addStringOption(option => option.setName('winner').setDescription('Optional winner mention, e.g. @Nala').setRequired(false).setMaxLength(100))
         .addStringOption(option => option.setName('mvp').setDescription('Optional MVP mention, e.g. @Nala').setRequired(false).setMaxLength(100))
         .addStringOption(option => option.setName('notes').setDescription('Optional updated live notes').setRequired(false).setMaxLength(300))

@@ -68,6 +68,17 @@ Verify the detail view shows:
 5. Run `/session lockin` without `players`.
 6. Verify the draft defaults to threshold-qualified candidate participants.
 
+## Live session game label checks
+
+1. Start a live session from a closed detected session and override `game` when the detected session inherited the wrong VC default.
+2. Verify the live session embed shows the corrected game label.
+3. Run `/session update live_session game:<game>` with a different valid game label.
+4. Verify the update embed and `/session update live_session` autocomplete show the corrected game label.
+5. End the live session.
+6. Verify `/session finalize live_session` autocomplete shows the corrected game label.
+7. Finalize the live session.
+8. Verify stats move only after finalize and the official event uses the corrected live-session game.
+
 ## Live session check-in checks
 
 1. Start a live session from a closed detected session.

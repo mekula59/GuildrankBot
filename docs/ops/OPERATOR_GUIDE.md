@@ -242,11 +242,15 @@ Optional fields:
 - `session_type`
 - `notes`
 
+The `game` field is the game label for this live draft. If GuildRank detected the session as the wrong game because the voice channel has a broad default, set `game` when starting the live session.
+
 Use `detected_session` when GuildRank already found the session.
 
 Use `planned_session` when the session was scheduled ahead of time and you want to begin from the plan.
 
 Use `channel` when you want to start directly from a tracked voice channel.
+
+The VC default is only a starting label. If the detected session says the wrong game, update the live session game before finalizing.
 
 ### `/session update`
 
@@ -256,6 +260,7 @@ You can replace:
 
 - `players`
 - `spectators`
+- `game`
 - `winner`
 - `mvp`
 - `notes`
@@ -263,6 +268,8 @@ You can replace:
 Players and spectators must be different people.
 
 Winner and MVP must be players.
+
+Changing the live session game label does not affect stats by itself. It updates the draft event label that `/session finalize` will use later.
 
 ### `/session checkin_open`
 

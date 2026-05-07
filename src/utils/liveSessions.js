@@ -536,6 +536,7 @@ async function updateLiveSession({
   guildId,
   liveSessionId,
   actorDiscordId,
+  gameKey = undefined,
   playerIds = undefined,
   spectatorIds = undefined,
   winnerId = undefined,
@@ -556,7 +557,8 @@ async function updateLiveSession({
   }
 
   if (
-    playerIds === undefined
+    gameKey === undefined
+    && playerIds === undefined
     && spectatorIds === undefined
     && winnerId === undefined
     && mvpId === undefined
@@ -573,6 +575,7 @@ async function updateLiveSession({
   const effectiveWinnerId = winnerId !== undefined ? winnerId : before.liveSession.winner_discord_user_id;
   const effectiveMvpId = mvpId !== undefined ? mvpId : before.liveSession.mvp_discord_user_id;
   const effectiveNotes = notes !== undefined ? normalizeNotes(notes) : before.liveSession.notes;
+  const effectiveGameKey = gameKey !== undefined ? normalizeGameKey(gameKey) : before.liveSession.game_key;
   const playerSet = new Set(roster.playerIds);
 
   if (effectiveWinnerId && !playerSet.has(effectiveWinnerId)) {
@@ -585,6 +588,7 @@ async function updateLiveSession({
   const { data, error } = await supabase
     .from('live_sessions')
     .update({
+      game_key: effectiveGameKey,
       notes: effectiveNotes,
       winner_discord_user_id: effectiveWinnerId || null,
       mvp_discord_user_id: effectiveMvpId || null,
