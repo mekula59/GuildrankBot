@@ -122,6 +122,8 @@ Once a detected session exists, operators have several paths.
 
 `/session detected_session` shows details for one detected session, including observed people and any planned-session context.
 
+Detected-session game labels are shown as a game fallback. The fallback comes from the tracked voice channel default or planning context. It is source evidence, not final event truth.
+
 ### Save lock-in draft truth
 
 `/session lockin` lets the operator save the player list they currently trust.
@@ -131,6 +133,8 @@ This is draft truth. It is stronger than raw evidence, but it still does not aff
 ### Start a live session
 
 `/session start detected_session` lets the operator promote the detected session into a live operational draft.
+
+The live session has its own editable game label. If the detected-session fallback is wrong, the operator should pass `game` on start or update the live session before finalize.
 
 This is useful when the game is still happening and the operator wants to actively manage:
 

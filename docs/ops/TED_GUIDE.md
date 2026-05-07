@@ -24,6 +24,10 @@ For example, a broad game VC might default to `chess`, but tonight the actual se
 
 If the detected session says the wrong game, update the live session game before finalizing.
 
+Detected-session menus may say `game fallback`. That means GuildRank is showing the starting label it inherited from the voice channel or plan.
+
+The live session game is the editable event label.
+
 Use:
 
 - `/session start detected_session game:<game>` when starting from voice activity

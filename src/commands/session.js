@@ -253,7 +253,7 @@ async function respondAutocompleteChoices(interaction, choices, context = {}) {
 }
 
 function buildCandidateDisplayLabel(candidate) {
-  return `${candidate.channel_name_snapshot || 'Voice Channel'} · ${candidate.game_key || 'session'} · ${formatShortUtcStamp(candidate.started_at)} · ${candidate.status || 'unknown'}`;
+  return `${candidate.channel_name_snapshot || 'Voice Channel'} · ${formatShortUtcStamp(candidate.started_at)} · ${candidate.status || 'unknown'} · game fallback: ${candidate.game_key || 'session'}`;
 }
 
 function buildCandidateAutocompleteName(candidate) {
@@ -346,7 +346,8 @@ function buildCandidateSummaryLine(candidate, scheduledSession = null) {
   return [
     `Detected session: ${buildCandidateDisplayLabel(candidate)}`,
     `Channel: <#${candidate.channel_id}>`,
-    `Game: \`${candidate.game_key}\``,
+    `Game fallback: \`${candidate.game_key}\``,
+    'Game fallback means the tracked VC default or schedule context, not final event truth.',
     `Status: \`${candidate.status}\``,
     `Window: ${formatDateTime(candidate.started_at)} → ${candidate.ended_at ? formatDateTime(candidate.ended_at) : 'live'}`,
     `Duration: ${formatDurationMinutes(candidate.started_at, candidate.ended_at)}`,
@@ -468,6 +469,35 @@ function buildLiveSessionSummaryLine(liveSession, people = []) {
     `Detected session context: ${liveSession.source_candidate_id ? 'linked' : '—'}`,
     `Schedule context: ${liveSession.scheduled_session_id ? 'linked' : '—'}`,
   ].join('\n');
+}
+
+function buildLiveSessionStartSourceFields(result) {
+  const fields = [];
+
+  if (result.sourceCandidate) {
+    fields.push({
+      name: 'Source Detected Session',
+      value: truncate(`${buildCandidateDisplayLabel(result.sourceCandidate)}\nThe detected-session game is a fallback label only.`),
+    });
+  } else if (result.sourceScheduledSession) {
+    fields.push({
+      name: 'Source Planned Session',
+      value: truncate(`${buildScheduleAutocompleteName(result.sourceScheduledSession)}\nThe planned game is starting context only.`),
+    });
+  } else {
+    fields.push({
+      name: 'Source Channel',
+      value: `<#${result.liveSession.channel_id}>`,
+    });
+  }
+
+  fields.push({
+    name: 'Live Draft Game',
+    value: `\`${result.liveSession.game_key}\`\nThis editable label is what finalize will use.`,
+    inline: false,
+  });
+
+  return fields;
 }
 
 function getLiveSessionStartDuplicateMessage(error) {
@@ -909,6 +939,7 @@ async function handleLiveSessionStart(interaction) {
     .setTitle('🟢 Live Session Started')
     .setDescription(buildLiveSessionSummaryLine(result.liveSession, result.people))
     .addFields(
+      ...buildLiveSessionStartSourceFields(result),
       { name: 'Players', value: truncate(formatLiveSessionPeople(result.people, 'player')) },
       { name: 'Spectators', value: truncate(formatLiveSessionPeople(result.people, 'spectator')) },
     )

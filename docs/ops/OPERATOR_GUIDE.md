@@ -182,7 +182,9 @@ That is useful, but it is still evidence.
 
 Lists recent detected sessions in the server.
 
-Use it to find the right session by channel, game label, start time, and status.
+Use it to find the right session by channel, start time, status, and game fallback.
+
+Detected-session labels say `game fallback` because the game came from the tracked VC default or matched planning context. It is a starting label, not final event truth.
 
 ### `/session detected_session`
 
@@ -251,6 +253,11 @@ Use `planned_session` when the session was scheduled ahead of time and you want 
 Use `channel` when you want to start directly from a tracked voice channel.
 
 The VC default is only a starting label. If the detected session says the wrong game, update the live session game before finalizing.
+
+When a live session starts from a detected session, GuildRank shows both labels:
+
+- the source detected-session label, including its game fallback
+- the live draft game label, which is the editable event label used by finalize
 
 ### `/session update`
 

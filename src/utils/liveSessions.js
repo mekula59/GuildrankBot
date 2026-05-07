@@ -302,6 +302,8 @@ async function startLiveSession({
   let resolvedSessionType;
   let sourceCandidateId = null;
   let resolvedScheduledSessionId = null;
+  let sourceCandidate = null;
+  let sourceScheduledSession = null;
   let playerIds = [];
   let spectatorIds = [];
   let peopleRows = [];
@@ -320,6 +322,7 @@ async function startLiveSession({
     }
 
     const candidate = await ensureCandidateParticipantSnapshotReady(beforeCandidate);
+    sourceCandidate = candidate;
     const candidateParticipants = await listCandidateParticipants(candidate.id, guildId);
     const lockinDraft = await getLockinDraftWithPlayers(guildId, candidate.id);
     const partitionedRoster = partitionCandidateRoster(
@@ -351,6 +354,7 @@ async function startLiveSession({
     );
   } else if (hasSchedule) {
     const scheduledSession = await getScheduledSessionById(guildId, scheduledSessionId);
+    sourceScheduledSession = scheduledSession;
     if (!scheduledSession) {
       throw new Error('Scheduled session not found in this server.');
     }
@@ -529,7 +533,11 @@ async function startLiveSession({
     },
   });
 
-  return after;
+  return {
+    ...after,
+    sourceCandidate,
+    sourceScheduledSession,
+  };
 }
 
 async function updateLiveSession({
