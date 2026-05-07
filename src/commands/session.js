@@ -550,6 +550,197 @@ function getLiveSessionStartFailureMessage(error) {
   ].join('\n');
 }
 
+function getSafeErrorMessage(error) {
+  return String(error?.message || error || 'Unknown error').replace(/\s+/g, ' ').trim();
+}
+
+function errorMessageIncludesAny(message, fragments) {
+  return fragments.some(fragment => message.toLowerCase().includes(fragment.toLowerCase()));
+}
+
+function isMissingMigrationOrConfigError(error, message) {
+  return errorMessageIncludesAny(message, [
+    'could not find the function',
+    'does not exist',
+    'schema cache',
+    'database did not return an official session',
+    'missing migration',
+    'column',
+    'relation',
+  ]);
+}
+
+function isDatabaseConflictError(error, message) {
+  return error?.code === '23505'
+    || error?.code === '23503'
+    || error?.code === '23514'
+    || errorMessageIncludesAny(message, [
+      'duplicate key',
+      'violates unique constraint',
+      'violates foreign key constraint',
+      'violates check constraint',
+      'attendance conflict',
+    ]);
+}
+
+function formatFinalizeFailureMessage(error, sourceType) {
+  const message = getSafeErrorMessage(error);
+  const sourceLabel = sourceType === 'live_session' ? 'live session' : 'detected session';
+
+  if (
+    message.startsWith('No valid @mentions were found')
+    || message.startsWith('These mentioned users are not valid members')
+    || message.startsWith('Mention exactly one user')
+  ) {
+    return `❌ ${message}`;
+  }
+
+  if (message.includes('already been finalized')) {
+    return `❌ This ${sourceLabel} has already been finalized. No new official session was created.`;
+  }
+
+  if (message.includes('not found in this server')) {
+    return `❌ That ${sourceLabel} was not found in this server. Refresh the autocomplete list and choose a current session.`;
+  }
+
+  if (message.includes('Finalize only works after the live session has been ended')) {
+    return '❌ This live session is still running. Use `/session end` first, then run `/session finalize`.';
+  }
+
+  if (message.includes('Live session finalize requires at least one player')) {
+    return '❌ This live session has no finalized players yet. Use `/session update` to add players before finalizing.';
+  }
+
+  if (message.includes('Only closed session candidates can be finalized')) {
+    return '❌ This detected session is not closed yet. Wait for it to close, or start a live session draft instead.';
+  }
+
+  if (message.includes('already been discarded')) {
+    return '❌ This detected session was already discarded and cannot be finalized.';
+  }
+
+  if (
+    message.includes('Winner must be included')
+    || message.includes('MVP must be included')
+  ) {
+    return `❌ ${message} Update the roster or choose a different winner/MVP before finalizing.`;
+  }
+
+  if (
+    message.includes('Finalize can only use the current live-session player roster')
+    || message.includes('One or more selected participants are not part of the candidate pool')
+    || message.includes('At least one participant is required')
+    || message.includes('Candidate participant rows are missing')
+    || message.includes('Candidate participant snapshot is not ready')
+  ) {
+    return `❌ Finalize could not use that roster. ${message}`;
+  }
+
+  if (
+    message.includes('scheduled session') ||
+    message.includes('Scheduled session')
+  ) {
+    return `❌ Scheduled-session link problem: ${message}`;
+  }
+
+  if (
+    message.includes('request_id_conflict')
+    || message.includes('already linked to another completed official session')
+    || message.includes('linked candidate could not be consumed')
+  ) {
+    return '❌ This finalize request conflicts with an official session that already exists. Refresh the session list and verify whether it was already finalized.';
+  }
+
+  if (isMissingMigrationOrConfigError(error, message)) {
+    return '❌ Finalize could not run because the database schema or runtime config is not ready. Apply the latest GuildRank migrations, redeploy, then retry.';
+  }
+
+  if (isDatabaseConflictError(error, message)) {
+    return '❌ Finalize hit a database integrity conflict while saving the official event or attendance. No duplicate reward should be issued. Refresh the session state and check Railway logs.';
+  }
+
+  return [
+    '❌ Finalize failed before GuildRank could finish.',
+    'Check Railway logs for `session_finalize_failed` and verify session status before retrying.',
+  ].join('\n');
+}
+
+async function getFinalizeSourceSafeStatus(guildId, sourceType, sourceId) {
+  try {
+    if (sourceType === 'live_session') {
+      const result = await getLiveSessionWithPeople(guildId, sourceId);
+      return result.liveSession?.status || 'not_found';
+    }
+
+    const candidate = await getSessionCandidateById(guildId, sourceId);
+    return candidate?.status || 'not_found';
+  } catch {
+    return 'status_lookup_failed';
+  }
+}
+
+async function logFinalizeFailure(interaction, {
+  sourceType,
+  sourceId,
+  error,
+}) {
+  const safeStatus = sourceId
+    ? await getFinalizeSourceSafeStatus(interaction.guildId, sourceType, sourceId)
+    : 'no_source';
+
+  logger.error('session_finalize_failed', {
+    request_id: interaction.id,
+    guild_id: interaction.guildId,
+    actor_id: interaction.user.id,
+    command: 'session finalize',
+    source_type: sourceType,
+    safe_status: safeStatus,
+    error_code: error?.code || error?.status || error?.name || null,
+    error_message: getSafeErrorMessage(error),
+  });
+}
+
+async function assignFinalizeRewardRolesOrWarn(interaction, {
+  participantIds,
+  people = [],
+  source,
+  sourceType,
+}) {
+  try {
+    return await assignParticipantRewardRoles({
+      guild: interaction.guild,
+      guildId: interaction.guildId,
+      config: await getGuildConfig(interaction.guildId),
+      participantIds,
+      people,
+      source,
+    });
+  } catch (error) {
+    logger.error('session_finalize_reward_failed', {
+      request_id: interaction.id,
+      guild_id: interaction.guildId,
+      actor_id: interaction.user.id,
+      command: 'session finalize',
+      source_type: sourceType,
+      error_code: error?.code || error?.status || error?.name || null,
+      error_message: getSafeErrorMessage(error),
+    });
+
+    return {
+      enabled: true,
+      scope: 'unknown',
+      roleId: null,
+      playerRoleId: null,
+      spectatorRoleId: null,
+      assigned: 0,
+      skipped: 0,
+      failed: 0,
+      reason: 'reward_assignment_failed',
+      warnings: ['Official finalize succeeded, but reward role assignment could not run. Check reward role setup and Railway logs.'],
+    };
+  }
+}
+
 function formatLockedRoster(lockinDraft, lockinPlayers) {
   if (!lockinDraft || !lockinPlayers.length) {
     return 'No admin lock-in draft saved yet.';
@@ -1103,46 +1294,99 @@ async function handleSessionFinalize(interaction) {
     return interaction.editReply('❌ Choose exactly one finalize source: either `detected_session` or `live_session`.');
   }
 
-  const scheduledSessionId = getRenamedStringOption(interaction, 'scheduled_session', 'scheduled_session_id') || null;
-  const notesInput = interaction.options.getString('notes');
-  const participantMentions = interaction.options.getString('players');
-  const winnerMention = interaction.options.getString('winner');
-  const mvpMention = interaction.options.getString('mvp');
-  const participantIds = participantMentions
-    ? await resolveMentionedGuildUserIds(interaction, participantMentions, { fieldName: 'players' })
-    : null;
-  const winnerId = winnerMention
-    ? (await resolveMentionedGuildUserIds(interaction, winnerMention, { fieldName: 'winner', requireSingle: true }))[0]
-    : null;
-  const mvpId = mvpMention
-    ? (await resolveMentionedGuildUserIds(interaction, mvpMention, { fieldName: 'mvp', requireSingle: true }))[0]
-    : null;
+  const sourceType = candidateId ? 'detected_session' : 'live_session';
+  const sourceId = candidateId || liveSessionId;
 
-  if (candidateId) {
-    const result = await finalizeSessionCandidate({
+  try {
+    const scheduledSessionId = getRenamedStringOption(interaction, 'scheduled_session', 'scheduled_session_id') || null;
+    const notesInput = interaction.options.getString('notes');
+    const participantMentions = interaction.options.getString('players');
+    const winnerMention = interaction.options.getString('winner');
+    const mvpMention = interaction.options.getString('mvp');
+    const participantIds = participantMentions
+      ? await resolveMentionedGuildUserIds(interaction, participantMentions, { fieldName: 'players' })
+      : null;
+    const winnerId = winnerMention
+      ? (await resolveMentionedGuildUserIds(interaction, winnerMention, { fieldName: 'winner', requireSingle: true }))[0]
+      : null;
+    const mvpId = mvpMention
+      ? (await resolveMentionedGuildUserIds(interaction, mvpMention, { fieldName: 'mvp', requireSingle: true }))[0]
+      : null;
+
+    if (candidateId) {
+      const result = await finalizeSessionCandidate({
+        requestId: interaction.id,
+        guildId: interaction.guildId,
+        candidateId,
+        actorDiscordId: interaction.user.id,
+        scheduledSessionId,
+        participantIds,
+        notes: notesInput || null,
+        winnerId,
+        mvpId,
+      });
+      const rewardSummary = await assignFinalizeRewardRolesOrWarn(interaction, {
+        participantIds: result.officialEvent.participant_ids || [],
+        source: 'candidate_finalize',
+        sourceType,
+      });
+
+      const embed = new EmbedBuilder()
+        .setColor(BRAND_COLOR)
+        .setTitle('✅ Detected Session Finalized')
+        .addFields(
+          { name: 'Detected Session', value: result.candidate ? buildCandidateDisplayLabel(result.candidate) : 'Selected detected session' },
+          { name: 'Official Session', value: `\`${result.officialEvent.id}\`` },
+          { name: 'Game', value: result.officialEvent.game_type || '—', inline: true },
+          { name: 'Type', value: result.officialEvent.session_type || '—', inline: true },
+          { name: 'Participants', value: `${result.officialEvent.participant_ids?.length || 0}`, inline: true },
+          { name: 'Roster Source', value: `\`${formatLockinSelectionSource(result.participantSource)}\``, inline: true },
+          { name: 'Roster', value: truncate((result.officialEvent.participant_ids || []).map(id => `<@${id}>`).join(', ') || '—') },
+          { name: 'Participant Reward Role', value: truncate(formatRewardSummary(rewardSummary)) },
+        )
+        .setFooter({ text: result.statsRebuilt ? 'Stats rebuilt successfully' : 'Stats repair queued' })
+        .setTimestamp();
+
+      if (result.officialEvent.scheduled_session_id) {
+        embed.addFields({
+          name: 'Scheduled Session',
+          value: `\`${result.officialEvent.scheduled_session_id}\``,
+        });
+      }
+
+      if (result.duplicate) {
+        embed.addFields({
+          name: 'ℹ️ Duplicate Request',
+          value: 'This finalize request was already applied earlier. No extra official session was created.',
+        });
+      }
+
+      return interaction.editReply({ embeds: [embed], allowedMentions: { parse: [] } });
+    }
+
+    const result = await finalizeLiveSession({
       requestId: interaction.id,
       guildId: interaction.guildId,
-      candidateId,
+      liveSessionId,
       actorDiscordId: interaction.user.id,
-      scheduledSessionId,
       participantIds,
-      notes: notesInput || null,
-      winnerId,
-      mvpId,
+      scheduledSessionId,
+      notes: notesInput ?? undefined,
+      winnerId: winnerId ?? undefined,
+      mvpId: mvpId ?? undefined,
     });
-    const rewardSummary = await assignParticipantRewardRoles({
-      guild: interaction.guild,
-      guildId: interaction.guildId,
-      config: await getGuildConfig(interaction.guildId),
+    const rewardSummary = await assignFinalizeRewardRolesOrWarn(interaction, {
       participantIds: result.officialEvent.participant_ids || [],
-      source: 'candidate_finalize',
+      people: result.people || [],
+      source: 'live_session_finalize',
+      sourceType,
     });
 
     const embed = new EmbedBuilder()
       .setColor(BRAND_COLOR)
-      .setTitle('✅ Detected Session Finalized')
+      .setTitle('✅ Live Session Finalized')
       .addFields(
-        { name: 'Detected Session', value: result.candidate ? buildCandidateDisplayLabel(result.candidate) : 'Selected detected session' },
+        { name: 'Live Session', value: buildLiveSessionDisplayLabel(result.liveSession) },
         { name: 'Official Session', value: `\`${result.officialEvent.id}\`` },
         { name: 'Game', value: result.officialEvent.game_type || '—', inline: true },
         { name: 'Type', value: result.officialEvent.session_type || '—', inline: true },
@@ -1161,6 +1405,13 @@ async function handleSessionFinalize(interaction) {
       });
     }
 
+    if (result.liveSession.source_candidate_id) {
+      embed.addFields({
+        name: 'Consumed Detected Session',
+        value: 'The linked detected session was marked finalized through this live session.',
+      });
+    }
+
     if (result.duplicate) {
       embed.addFields({
         name: 'ℹ️ Duplicate Request',
@@ -1169,66 +1420,15 @@ async function handleSessionFinalize(interaction) {
     }
 
     return interaction.editReply({ embeds: [embed], allowedMentions: { parse: [] } });
-  }
-
-  const result = await finalizeLiveSession({
-    requestId: interaction.id,
-    guildId: interaction.guildId,
-    liveSessionId,
-    actorDiscordId: interaction.user.id,
-    participantIds,
-    scheduledSessionId,
-    notes: notesInput ?? undefined,
-    winnerId: winnerId ?? undefined,
-    mvpId: mvpId ?? undefined,
-  });
-  const rewardSummary = await assignParticipantRewardRoles({
-    guild: interaction.guild,
-    guildId: interaction.guildId,
-    config: await getGuildConfig(interaction.guildId),
-    participantIds: result.officialEvent.participant_ids || [],
-    people: result.people || [],
-    source: 'live_session_finalize',
-  });
-
-  const embed = new EmbedBuilder()
-    .setColor(BRAND_COLOR)
-    .setTitle('✅ Live Session Finalized')
-    .addFields(
-      { name: 'Live Session', value: buildLiveSessionDisplayLabel(result.liveSession) },
-      { name: 'Official Session', value: `\`${result.officialEvent.id}\`` },
-      { name: 'Game', value: result.officialEvent.game_type || '—', inline: true },
-      { name: 'Type', value: result.officialEvent.session_type || '—', inline: true },
-      { name: 'Participants', value: `${result.officialEvent.participant_ids?.length || 0}`, inline: true },
-      { name: 'Roster Source', value: `\`${formatLockinSelectionSource(result.participantSource)}\``, inline: true },
-      { name: 'Roster', value: truncate((result.officialEvent.participant_ids || []).map(id => `<@${id}>`).join(', ') || '—') },
-      { name: 'Participant Reward Role', value: truncate(formatRewardSummary(rewardSummary)) },
-    )
-    .setFooter({ text: result.statsRebuilt ? 'Stats rebuilt successfully' : 'Stats repair queued' })
-    .setTimestamp();
-
-  if (result.officialEvent.scheduled_session_id) {
-    embed.addFields({
-      name: 'Scheduled Session',
-      value: `\`${result.officialEvent.scheduled_session_id}\``,
+  } catch (error) {
+    await logFinalizeFailure(interaction, { sourceType, sourceId, error });
+    return interaction.editReply({
+      content: formatFinalizeFailureMessage(error, sourceType),
+      embeds: [],
+      components: [],
+      allowedMentions: { parse: [] },
     });
   }
-
-  if (result.liveSession.source_candidate_id) {
-    embed.addFields({
-      name: 'Consumed Detected Session',
-      value: 'The linked detected session was marked finalized through this live session.',
-    });
-  }
-
-  if (result.duplicate) {
-    embed.addFields({
-      name: 'ℹ️ Duplicate Request',
-      value: 'This finalize request was already applied earlier. No extra official session was created.',
-    });
-  }
-
-  return interaction.editReply({ embeds: [embed], allowedMentions: { parse: [] } });
 }
 
 async function handleSessionSchedule(interaction) {
