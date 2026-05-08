@@ -47,6 +47,11 @@ const {
   assignParticipantRewardRoles,
   formatRewardSummary,
 } = require('../utils/participantRewards');
+const {
+  classifyFinalizeError,
+  formatFinalizeFailureMessage,
+  getSafeErrorMessage,
+} = require('../utils/finalizeErrorMessages');
 const { checkMutationThrottle } = require('../utils/throttle');
 const logger = require('../utils/logger');
 const { BRAND_COLOR } = require('../../config/constants');
@@ -550,121 +555,6 @@ function getLiveSessionStartFailureMessage(error) {
   ].join('\n');
 }
 
-function getSafeErrorMessage(error) {
-  return String(error?.message || error || 'Unknown error').replace(/\s+/g, ' ').trim();
-}
-
-function errorMessageIncludesAny(message, fragments) {
-  return fragments.some(fragment => message.toLowerCase().includes(fragment.toLowerCase()));
-}
-
-function isMissingMigrationOrConfigError(error, message) {
-  return errorMessageIncludesAny(message, [
-    'could not find the function',
-    'does not exist',
-    'schema cache',
-    'database did not return an official session',
-    'missing migration',
-    'column',
-    'relation',
-  ]);
-}
-
-function isDatabaseConflictError(error, message) {
-  return error?.code === '23505'
-    || error?.code === '23503'
-    || error?.code === '23514'
-    || errorMessageIncludesAny(message, [
-      'duplicate key',
-      'violates unique constraint',
-      'violates foreign key constraint',
-      'violates check constraint',
-      'attendance conflict',
-    ]);
-}
-
-function formatFinalizeFailureMessage(error, sourceType) {
-  const message = getSafeErrorMessage(error);
-  const sourceLabel = sourceType === 'live_session' ? 'live session' : 'detected session';
-
-  if (
-    message.startsWith('No valid @mentions were found')
-    || message.startsWith('These mentioned users are not valid members')
-    || message.startsWith('Mention exactly one user')
-  ) {
-    return `❌ ${message}`;
-  }
-
-  if (message.includes('already been finalized')) {
-    return `❌ This ${sourceLabel} has already been finalized. No new official session was created.`;
-  }
-
-  if (message.includes('not found in this server')) {
-    return `❌ That ${sourceLabel} was not found in this server. Refresh the autocomplete list and choose a current session.`;
-  }
-
-  if (message.includes('Finalize only works after the live session has been ended')) {
-    return '❌ This live session is still running. Use `/session end` first, then run `/session finalize`.';
-  }
-
-  if (message.includes('Live session finalize requires at least one player')) {
-    return '❌ This live session has no finalized players yet. Use `/session update` to add players before finalizing.';
-  }
-
-  if (message.includes('Only closed session candidates can be finalized')) {
-    return '❌ This detected session is not closed yet. Wait for it to close, or start a live session draft instead.';
-  }
-
-  if (message.includes('already been discarded')) {
-    return '❌ This detected session was already discarded and cannot be finalized.';
-  }
-
-  if (
-    message.includes('Winner must be included')
-    || message.includes('MVP must be included')
-  ) {
-    return `❌ ${message} Update the roster or choose a different winner/MVP before finalizing.`;
-  }
-
-  if (
-    message.includes('Finalize can only use the current live-session player roster')
-    || message.includes('One or more selected participants are not part of the candidate pool')
-    || message.includes('At least one participant is required')
-    || message.includes('Candidate participant rows are missing')
-    || message.includes('Candidate participant snapshot is not ready')
-  ) {
-    return `❌ Finalize could not use that roster. ${message}`;
-  }
-
-  if (
-    message.includes('scheduled session') ||
-    message.includes('Scheduled session')
-  ) {
-    return `❌ Scheduled-session link problem: ${message}`;
-  }
-
-  if (
-    message.includes('request_id_conflict')
-    || message.includes('already linked to another completed official session')
-    || message.includes('linked candidate could not be consumed')
-  ) {
-    return '❌ This finalize request conflicts with an official session that already exists. Refresh the session list and verify whether it was already finalized.';
-  }
-
-  if (isMissingMigrationOrConfigError(error, message)) {
-    return '❌ Finalize could not run because the database schema or runtime config is not ready. Apply the latest GuildRank migrations, redeploy, then retry.';
-  }
-
-  if (isDatabaseConflictError(error, message)) {
-    return '❌ Finalize hit a database integrity conflict while saving the official event or attendance. No duplicate reward should be issued. Refresh the session state and check Railway logs.';
-  }
-
-  return [
-    '❌ Finalize failed before GuildRank could finish.',
-    'Check Railway logs for `session_finalize_failed` and verify session status before retrying.',
-  ].join('\n');
-}
-
 async function getFinalizeSourceSafeStatus(guildId, sourceType, sourceId) {
   try {
     if (sourceType === 'live_session') {
@@ -695,6 +585,7 @@ async function logFinalizeFailure(interaction, {
     command: 'session finalize',
     source_type: sourceType,
     safe_status: safeStatus,
+    error_category: classifyFinalizeError(error, sourceType),
     error_code: error?.code || error?.status || error?.name || null,
     error_message: getSafeErrorMessage(error),
   });
@@ -722,6 +613,7 @@ async function assignFinalizeRewardRolesOrWarn(interaction, {
       actor_id: interaction.user.id,
       command: 'session finalize',
       source_type: sourceType,
+      error_category: 'reward_assignment_failed',
       error_code: error?.code || error?.status || error?.name || null,
       error_message: getSafeErrorMessage(error),
     });
@@ -1325,6 +1217,16 @@ async function handleSessionFinalize(interaction) {
         winnerId,
         mvpId,
       });
+      logger.info('session_finalize_official_created', {
+        request_id: interaction.id,
+        guild_id: interaction.guildId,
+        actor_id: interaction.user.id,
+        command: 'session finalize',
+        source_type: sourceType,
+        participant_count: result.officialEvent.participant_ids?.length || 0,
+        duplicate: result.duplicate === true,
+        reward_assignment_pending: true,
+      });
       const rewardSummary = await assignFinalizeRewardRolesOrWarn(interaction, {
         participantIds: result.officialEvent.participant_ids || [],
         source: 'candidate_finalize',
@@ -1374,6 +1276,16 @@ async function handleSessionFinalize(interaction) {
       notes: notesInput ?? undefined,
       winnerId: winnerId ?? undefined,
       mvpId: mvpId ?? undefined,
+    });
+    logger.info('session_finalize_official_created', {
+      request_id: interaction.id,
+      guild_id: interaction.guildId,
+      actor_id: interaction.user.id,
+      command: 'session finalize',
+      source_type: sourceType,
+      participant_count: result.officialEvent.participant_ids?.length || 0,
+      duplicate: result.duplicate === true,
+      reward_assignment_pending: true,
     });
     const rewardSummary = await assignFinalizeRewardRolesOrWarn(interaction, {
       participantIds: result.officialEvent.participant_ids || [],

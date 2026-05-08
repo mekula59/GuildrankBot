@@ -11,6 +11,10 @@ const {
   formatRewardSummary,
 } = require('../src/utils/participantRewards');
 const {
+  classifyFinalizeError,
+  formatFinalizeFailureMessage,
+} = require('../src/utils/finalizeErrorMessages');
+const {
   DEFAULT_DIGEST_TIME_UTC,
   shouldSendDigestForConfig,
 } = require('../src/utils/weeklyDigestSchedule');
@@ -401,6 +405,19 @@ test('participant reward scopes choose the expected roster members', () => {
     participantIds: ['player-1'],
     people,
     config: {
+      participant_reward_scope: 'players_and_spectators',
+      participant_reward_role_id: 'shared-role',
+      player_reward_role_id: null,
+      spectator_reward_role_id: null,
+    },
+  }), [
+    { label: 'players and spectators', roleId: 'shared-role', userIds: ['player-1', 'spectator-1', 'spectator-2'] },
+  ]);
+
+  assert.deepEqual(buildRewardBuckets({
+    participantIds: ['player-1'],
+    people,
+    config: {
       participant_reward_scope: 'separate_roles',
       player_reward_role_id: 'player-role',
       spectator_reward_role_id: 'viewer-role',
@@ -494,4 +511,31 @@ test('participant reward summary explains disabled and permission states', () =>
     failed: 0,
     warnings: ['GuildRank cannot assign the players reward role yet. Give the bot Manage Roles and move the GuildRank bot role above the reward role.'],
   }), /Manage Roles/);
+});
+
+test('finalize error mapping only reports missing schema for real schema errors', () => {
+  assert.equal(
+    classifyFinalizeError({ code: 'PGRST202', message: 'Could not find the function public.finalize_live_session in the schema cache' }, 'live_session'),
+    'missing_schema_or_config'
+  );
+
+  assert.equal(
+    classifyFinalizeError({ message: 'DiscordAPIError[10011]: Unknown Role' }, 'live_session'),
+    'unknown'
+  );
+
+  assert.equal(
+    classifyFinalizeError({ message: 'Reward role does not exist in this guild.' }, 'live_session'),
+    'unknown'
+  );
+
+  assert.doesNotMatch(
+    formatFinalizeFailureMessage({ message: 'Reward role does not exist in this guild.' }, 'live_session'),
+    /migrations/i
+  );
+
+  assert.match(
+    formatFinalizeFailureMessage({ code: '23505', message: 'duplicate key value violates unique constraint "events_request_id_key"' }, 'live_session'),
+    /database integrity conflict/
+  );
 });
